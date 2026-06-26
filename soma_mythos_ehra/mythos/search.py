@@ -135,7 +135,12 @@ class MythosSearch:
     @torch.no_grad()
     def choose(self, state: torch.Tensor, available_actions: tuple[int, ...] | None = None) -> SearchDecision:
         actions = normalize_actions(available_actions)
-        root = SearchNode(self.simulator.to_device(state))
+        raw = self.simulator.to_device(state)
+        if raw.ndim == 3 and raw.shape[0] != 1:
+            raw = raw[0:1]
+        elif raw.ndim == 2:
+            raw = raw.unsqueeze(0)
+        root = SearchNode(raw)
         self.meta.remember(root.state)
 
         for _ in range(max(1, self.config.simulations)):
@@ -175,8 +180,13 @@ class MythosSearch:
         untried = [a for a in actions if a not in node.children]
         if not untried:
             return
+        single_state = node.state
+        if single_state.ndim == 3 and single_state.shape[0] != 1:
+            single_state = single_state[0:1]
+        elif single_state.ndim == 2:
+            single_state = single_state.unsqueeze(0)
         batch_actions = torch.tensor(untried, device=self.simulator.device)
-        batch_states = node.state.repeat(len(untried), 1, 1)
+        batch_states = single_state.expand(len(untried), -1, -1).contiguous()
         next_states, physics_energy = self.simulator.step_batch(batch_states, batch_actions)
         latent_energy = self.world_model.energy(batch_states, batch_actions, next_states)
         goal_energy = self.simulator.distance_to_goal_energy(next_states)
