@@ -1,3 +1,14 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:b78cd4aae631a8974302cd32e39dbeda448481949482a9e8d98797e4067c3fae
-size 141
+.pytest_cache/
+__pycache__/
+*.py[cod]
+*.recording.jsonl
+recordings/
+logs.log
+venv/
+venv*/
+.env
+.env.*
+!.env.example
+*.egg-info/
+dist/
+build/
