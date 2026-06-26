@@ -59,3 +59,27 @@ class JEPAWorldModel(nn.Module):
         pred_error = 1.0 - F.cosine_similarity(z_hat, z_next, dim=-1)
         learned = self.energy_head(torch.cat((z_t, z_hat, z_next), dim=-1)).flatten()
         return pred_error.clamp_min(0.0) + learned
+
+    def compute_energy(
+        self,
+        current: torch.Tensor,
+        actions: torch.Tensor,
+        candidates: torch.Tensor,
+    ) -> torch.Tensor:
+        """Batch-aware energy computation returning per-sample energies.
+
+        Args:
+            current: (B, H, W) or (B, 1, H, W) current grid states
+            actions: (B,) action indices
+            candidates: (B, H, W) or (B, 1, H, W) candidate next states
+
+        Returns:
+            (B,) per-sample energy values
+        """
+        z_t = self.encode(current)
+        z_next = self.encode(candidates)
+        action_latent = self.action_embedding(actions.long())
+        z_hat = F.normalize(self.predictor(torch.cat((z_t, action_latent), dim=-1)), dim=-1)
+        pred_error = 1.0 - F.cosine_similarity(z_hat, z_next, dim=-1)
+        learned = self.energy_head(torch.cat((z_t, z_hat, z_next), dim=-1)).squeeze(-1)
+        return pred_error.clamp_min(0.0) + learned

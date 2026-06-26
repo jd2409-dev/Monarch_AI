@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from pathlib import Path
 
 import torch
 
@@ -17,13 +18,14 @@ class MonarchConfig:
     max_actions: int = 100
     horizon: int = 24
     simulations: int = 256
-    num_symbols: int = 16
+    num_symbols: int = 17
     num_actions: int = 8
     latent_dim: int = 64
     exploration: float = 3.5
     cycle_penalty: float = 15.0
     tabu_window: int = 8
     tabu_revisit_penalty: float = 25.0
+    model_path: str | None = "checkpoints/best_jepa.pt"
 
 
 class MonarchAI:
@@ -41,6 +43,13 @@ class MonarchAI:
             num_actions=self.config.num_actions,
             latent_dim=self.config.latent_dim,
         )
+        if self.config.model_path is not None:
+            path = Path(self.config.model_path)
+            if path.exists():
+                ckpt = torch.load(path, map_location=self.device, weights_only=False)
+                world_model.load_state_dict(ckpt["model_state_dict"])
+                world_model.to(self.device)
+                world_model.eval()
         search = MythosSearch(
             simulator=simulator,
             world_model=world_model,

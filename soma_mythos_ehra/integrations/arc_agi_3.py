@@ -34,7 +34,9 @@ class Monarch_AI(Agent):
                 max_actions=1,
                 horizon=10,
                 simulations=48,
-                latent_dim=32,
+                num_symbols=17,
+                latent_dim=64,
+                model_path="checkpoints/best_jepa.pt",
             )
         )
         self._global_positions: list[tuple[int, int]] = []
