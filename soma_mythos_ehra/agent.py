@@ -20,6 +20,10 @@ class MonarchConfig:
     num_symbols: int = 16
     num_actions: int = 8
     latent_dim: int = 64
+    exploration: float = 3.5
+    cycle_penalty: float = 15.0
+    tabu_window: int = 8
+    tabu_revisit_penalty: float = 25.0
 
 
 class MonarchAI:
@@ -40,7 +44,14 @@ class MonarchAI:
         search = MythosSearch(
             simulator=simulator,
             world_model=world_model,
-            config=MythosConfig(horizon=self.config.horizon, simulations=self.config.simulations),
+            config=MythosConfig(
+                horizon=self.config.horizon,
+                simulations=self.config.simulations,
+                exploration=self.config.exploration,
+                cycle_penalty=self.config.cycle_penalty,
+                tabu_window=self.config.tabu_window,
+                tabu_revisit_penalty=self.config.tabu_revisit_penalty,
+            ),
         )
         return EHRARuntime(search=search, max_actions=self.config.max_actions)
 

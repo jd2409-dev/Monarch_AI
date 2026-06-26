@@ -62,6 +62,8 @@ class EHRARuntime:
         state = initial_state.clone()
         chosen: list[int] = []
 
+        self.search.reset_meta()
+
         for step in range(self.max_actions):
             started = time.perf_counter()
             decision = self.search.choose(state.grid, actions)
