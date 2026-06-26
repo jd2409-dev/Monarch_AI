@@ -102,7 +102,10 @@ class EHRARuntime:
         return int(action if action in available_actions else available_actions[0])
 
     def _simulator_transition(self, state: GridState, action: int) -> GridState:
-        grid, energy = self.search.simulator.step_batch(state.grid, torch.tensor([action]))
+        grid_input = state.grid
+        if grid_input.ndim == 3:
+            grid_input = grid_input[0]
+        grid, energy = self.search.simulator.step_batch(grid_input.unsqueeze(0), torch.tensor([action]))
         done = bool(energy[0].item() == 0.0)
         return GridState(grid=grid[0].detach().cpu(), step=state.step + 1, score=state.score - float(energy[0]), done=done)
 
