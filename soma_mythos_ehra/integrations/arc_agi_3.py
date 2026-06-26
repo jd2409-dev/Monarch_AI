@@ -5,6 +5,7 @@ from typing import Any
 import torch
 
 from soma_mythos_ehra import MonarchAI, MonarchConfig
+from soma_mythos_ehra.mythos.search import extract_agent_pos
 
 try:
     from agents.agent import Agent
@@ -35,6 +36,8 @@ class Monarch_AI(Agent):
                 latent_dim=32,
             )
         )
+        self._global_positions: list[tuple[int, int]] = []
+        self._action_history: list[int] = []
 
     @property
     def name(self) -> str:
@@ -46,6 +49,8 @@ class Monarch_AI(Agent):
 
     def choose_action(self, frames: list[FrameData], latest_frame: FrameData) -> GameAction:
         if latest_frame.state in [GameState.NOT_PLAYED, GameState.GAME_OVER]:
+            self._global_positions.clear()
+            self._action_history.clear()
             action = GameAction.RESET
             action.reasoning = {"agent": "Monarch_AI", "reason": "start_or_restart"}
             return action
@@ -59,8 +64,24 @@ class Monarch_AI(Agent):
         if not available:
             available = [int(a.value) for a in GameAction if a is not GameAction.RESET]
 
-        result = self._monarch.solve(grid, available_actions=tuple(available))
+        runtime = self._monarch.build_runtime(grid)
+
+        if self._global_positions:
+            meta = runtime.search.meta
+            for pos in self._global_positions[-meta.tabu_window:]:
+                meta.recent_positions.append(pos)
+                meta.position_visit_counts[pos] = meta.position_visit_counts.get(pos, 0) + 1
+            meta.step_count = len(self._global_positions)
+
+        from soma_mythos_ehra.types import GridState
+        result = runtime.run(GridState(grid.detach().cpu()), available_actions=tuple(available))
+
         selected_id = result.actions[0] if result.actions else available[0]
+
+        agent_pos = extract_agent_pos(result.final_state.grid)
+        self._global_positions.append(agent_pos)
+        self._action_history.append(selected_id)
+
         action = GameAction.from_id(int(selected_id))
         if action.is_complex():
             action.set_data({"x": 32, "y": 32, "game_id": getattr(self, "game_id", "")})
