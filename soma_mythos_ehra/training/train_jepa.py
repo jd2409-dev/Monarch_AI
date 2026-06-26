@@ -194,8 +194,8 @@ def main() -> None:
     parser.add_argument("--lr", type=float, default=1e-3, help="Learning rate")
     parser.add_argument("--num-negatives", type=int, default=4, help="Number of negative samples")
     parser.add_argument("--val-split", type=float, default=0.1, help="Validation split ratio")
-    parser.add_argument("--grid-h", type=int, default=12, help="Grid height")
-    parser.add_argument("--grid-w", type=int, default=12, help="Grid width")
+    parser.add_argument("--grid-h", type=int, default=64, help="Grid height")
+    parser.add_argument("--grid-w", type=int, default=64, help="Grid width")
     parser.add_argument("--save-every", type=int, default=10, help="Save checkpoint every N epochs")
     args = parser.parse_args()
 

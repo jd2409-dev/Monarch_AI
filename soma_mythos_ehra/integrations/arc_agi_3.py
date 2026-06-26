@@ -14,6 +14,29 @@ try:
 except ImportError as exc:  # pragma: no cover - optional integration guard
     raise ImportError("ARC-AGI-3 integration requires the official agents harness and arcengine") from exc
 
+# ARC uses different cell values than our simulator.
+# ARC: 0=empty, 1=agent, 3=wall, 4+=objects
+# Simulator: 0=empty, 1=wall, 2=agent, 3=goal
+ARC_TO_SIM_MAP = {
+    0: 0,  # empty
+    1: 2,  # agent
+    2: 0,  # (not used in ARC)
+    3: 1,  # wall
+}
+ARC_AGENT_VALUE = 1
+ARC_WALL_VALUES = {3, 4, 5, 8, 9, 11, 12}
+
+
+def remap_arc_grid(grid: torch.Tensor) -> torch.Tensor:
+    """Remap ARC cell values to simulator values."""
+    out = torch.zeros_like(grid)
+    # Agent
+    out[grid == ARC_AGENT_VALUE] = 2
+    # Walls
+    for v in ARC_WALL_VALUES:
+        out[grid == v] = 1
+    return out
+
 
 class Monarch_AI(Agent):
     """ARC-AGI-3 adapter class registered as Monarch_AI.
@@ -67,6 +90,8 @@ class Monarch_AI(Agent):
             return action
 
         grid = torch.tensor(latest_frame.frame, dtype=torch.long)
+        # Remap ARC values to simulator values
+        grid = remap_arc_grid(grid)
         available = []
         for raw_action in latest_frame.available_actions:
             action_id = int(raw_action.value) if hasattr(raw_action, "value") else int(raw_action)
