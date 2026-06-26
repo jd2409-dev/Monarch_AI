@@ -3,6 +3,7 @@ __pycache__/
 *.py[cod]
 *.recording.jsonl
 recordings/
+synthetic_recordings/
 logs.log
 venv/
 venv*/
@@ -12,3 +13,5 @@ venv*/
 *.egg-info/
 dist/
 build/
+checkpoints_v2/
+checkpoints_v3/
