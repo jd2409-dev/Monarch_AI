@@ -178,12 +178,69 @@ def parse_recording(
     return transitions
 
 
+def parse_synthetic_recording(
+    recording_path: Path,
+    target_h: int = DEFAULT_GRID_H,
+    target_w: int = DEFAULT_GRID_W,
+) -> list[tuple[torch.Tensor, int, torch.Tensor]]:
+    """Parse a synthetic recording JSONL file into (state, action, next_state) triples.
+
+    Each line has: {"grid": [[...]], "action": int, "next_grid": [[...]]}
+    """
+    transitions: list[tuple[torch.Tensor, int, torch.Tensor]] = []
+
+    with recording_path.open("r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                entry = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+
+            if "grid" not in entry or "next_grid" not in entry or "action" not in entry:
+                continue
+
+            grid = entry["grid"]
+            next_grid = entry["next_grid"]
+            action = int(entry["action"])
+
+            if not isinstance(grid, list) or not isinstance(next_grid, list):
+                continue
+
+            state_padded = _pad_grid(grid, target_h, target_w)
+            next_state_padded = _pad_grid(next_grid, target_h, target_w)
+
+            state_tensor = torch.tensor(state_padded, dtype=torch.long)
+            next_state_tensor = torch.tensor(next_state_padded, dtype=torch.long)
+
+            transitions.append((state_tensor, action, next_state_tensor))
+
+    return transitions
+
+
+def _detect_format(file_path: Path) -> str:
+    """Detect whether a JSONL file is ARC recording or synthetic format."""
+    try:
+        with file_path.open("r", encoding="utf-8") as f:
+            first_line = f.readline().strip()
+            if not first_line:
+                return "arc"
+            entry = json.loads(first_line)
+            if "grid" in entry and "next_grid" in entry and "action" in entry:
+                return "synthetic"
+            return "arc"
+    except (json.JSONDecodeError, OSError):
+        return "arc"
+
+
 class ARCRecordingDataset(Dataset):
-    """Dataset of (state, action, next_state) transitions from ARC recordings."""
+    """Dataset of (state, action, next_state) transitions from ARC or synthetic recordings."""
 
     def __init__(
         self,
-        recordings_dir: Path,
+        recordings_dir: Path | list[Path],
         target_h: int = DEFAULT_GRID_H,
         target_w: int = DEFAULT_GRID_W,
     ) -> None:
@@ -191,10 +248,20 @@ class ARCRecordingDataset(Dataset):
         self.target_h = target_h
         self.target_w = target_w
 
-        recording_files = sorted(recordings_dir.glob("*.jsonl"))
-        for rec_file in recording_files:
-            transitions = parse_recording(rec_file, target_h, target_w)
-            self.transitions.extend(transitions)
+        if isinstance(recordings_dir, Path):
+            recordings_dir = [recordings_dir]
+
+        for directory in recordings_dir:
+            if not directory.exists():
+                continue
+            recording_files = sorted(directory.glob("*.jsonl"))
+            for rec_file in recording_files:
+                format_type = _detect_format(rec_file)
+                if format_type == "synthetic":
+                    transitions = parse_synthetic_recording(rec_file, target_h, target_w)
+                else:
+                    transitions = parse_recording(rec_file, target_h, target_w)
+                self.transitions.extend(transitions)
 
     def __len__(self) -> int:
         return len(self.transitions)

@@ -187,7 +187,7 @@ def evaluate(
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Train JEPA world model")
-    parser.add_argument("--recordings-dir", type=Path, required=True, help="Directory with ARC recording JSONL files")
+    parser.add_argument("--recordings-dirs", type=str, required=True, help="Comma-separated list of directories with recording JSONL files")
     parser.add_argument("--output-dir", type=Path, default=Path("checkpoints"), help="Output directory for checkpoints")
     parser.add_argument("--epochs", type=int, default=50, help="Number of training epochs")
     parser.add_argument("--batch-size", type=int, default=32, help="Batch size")
@@ -202,9 +202,12 @@ def main() -> None:
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
 
+    # Parse multiple directories
+    dirs = [Path(d.strip()) for d in args.recordings_dirs.split(",")]
+    print(f"Loading recordings from {len(dirs)} directories...")
+
     # Load dataset
-    print(f"Loading recordings from {args.recordings_dir}...")
-    dataset = ARCRecordingDataset(args.recordings_dir, target_h=args.grid_h, target_w=args.grid_w)
+    dataset = ARCRecordingDataset(dirs, target_h=args.grid_h, target_w=args.grid_w)
     print(f"Loaded {len(dataset)} transitions")
 
     if len(dataset) == 0:
