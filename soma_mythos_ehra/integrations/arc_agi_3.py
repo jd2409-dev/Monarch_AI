@@ -15,26 +15,33 @@ except ImportError as exc:  # pragma: no cover - optional integration guard
     raise ImportError("ARC-AGI-3 integration requires the official agents harness and arcengine") from exc
 
 # ARC uses different cell values than our simulator.
-# ARC: 0=empty, 1=agent, 3=wall, 4+=objects
+# ARC level ls20: 0=empty, 1=agent, 3=floor, 4=wall, 5=border,
+#   8=object, 9=object, 11=corridor, 12=platform
 # Simulator: 0=empty, 1=wall, 2=agent, 3=goal
-ARC_TO_SIM_MAP = {
-    0: 0,  # empty
-    1: 2,  # agent
-    2: 0,  # (not used in ARC)
-    3: 1,  # wall
-}
 ARC_AGENT_VALUE = 1
-ARC_WALL_VALUES = {3, 4, 5, 8, 9, 11, 12}
+ARC_FLOOR_VALUES = {0, 3, 11}  # walkable cells
+ARC_WALL_VALUES = {4, 5, 8, 9}  # impassable cells
+ARC_DYNAMIC_VALUES = {12}  # moving platforms
 
 
 def remap_arc_grid(grid: torch.Tensor) -> torch.Tensor:
-    """Remap ARC cell values to simulator values."""
+    """Remap ARC cell values to simulator values.
+
+    Infers passability from the grid structure:
+    - The agent (value 1) and its reachable neighbors are walkable
+    - Outer boundary cells (value 4,5) are walls
+    - Value 3 is floor (walkable), not wall
+    """
     out = torch.zeros_like(grid)
     # Agent
     out[grid == ARC_AGENT_VALUE] = 2
-    # Walls
+    # Walls (boundary)
     for v in ARC_WALL_VALUES:
         out[grid == v] = 1
+    # Dynamic objects (platforms) treated as walls for collision
+    for v in ARC_DYNAMIC_VALUES:
+        out[grid == v] = 1
+    # Everything else (0, 3, 11) stays 0 = walkable
     return out
 
 
