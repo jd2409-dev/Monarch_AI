@@ -8,10 +8,13 @@ from dataclasses import dataclass, field
 import torch
 
 from soma_mythos_ehra.arc3.adapter import ARC3Task
+from soma_mythos_ehra.arc3.objects import extract_objects, connected_component_labeling
 from soma_mythos_ehra.arc3.transforms import (
     NUM_TRANSFORMS,
     TransformType,
     apply_sequence,
+    apply_fill_holes,
+    apply_tile,
 )
 
 
@@ -62,14 +65,44 @@ class ARC3Solver:
         if not train_inputs:
             return None
 
-        # Try color map first
+        # Heuristic 1: Color map
         color_map = self._learn_color_map(train_inputs, train_outputs)
         if color_map:
             mapped = [self._apply_color_map(inp, color_map) for inp in train_inputs]
             if _compute_energy(mapped, train_outputs) == 0:
                 return [{"transform": TransformType.COLOR_MAP, "color_map": color_map}]
 
-        # Try MCTS
+        # Heuristic 2: Scale/resize pattern
+        scale_result = self._try_scale_heuristic(train_inputs, train_outputs)
+        if scale_result is not None:
+            return scale_result
+
+        # Heuristic 3: Rotation sequence
+        rot_result = self._try_rotation_heuristic(train_inputs, train_outputs)
+        if rot_result is not None:
+            return rot_result
+
+        # Heuristic 4: Object sorting
+        sort_result = self._try_sort_heuristic(train_inputs, train_outputs)
+        if sort_result is not None:
+            return sort_result
+
+        # Heuristic 5: Hole filling
+        fill_result = self._try_fill_holes_heuristic(train_inputs, train_outputs)
+        if fill_result is not None:
+            return fill_result
+
+        # Heuristic 6: Tiling pattern
+        tile_result = self._try_tile_heuristic(train_inputs, train_outputs)
+        if tile_result is not None:
+            return tile_result
+
+        # Heuristic 7: Component coloring
+        comp_result = self._try_component_coloring_heuristic(train_inputs, train_outputs)
+        if comp_result is not None:
+            return comp_result
+
+        # Full MCTS search
         result = self._search(train_inputs, train_outputs)
         if result is not None:
             return result
@@ -97,6 +130,152 @@ class ARC3Solver:
         for src, dst in mapping.items():
             out[grid == src] = dst
         return out
+
+    def _try_scale_heuristic(self, inputs: list[torch.Tensor], targets: list[torch.Tensor]) -> list[dict] | None:
+        """Try scale up/down patterns."""
+        for inp, tgt in zip(inputs, targets):
+            ih, iw = inp.shape
+            th, tw = tgt.shape
+            if ih == th and iw == tw:
+                continue
+            # Check if target is a scaled version of input
+            if th >= ih and tw >= iw:
+                fy, fx = th // ih, tw // iw
+                if fy * ih == th and fx * iw == tw:
+                    # Try tiling the input
+                    from soma_mythos_ehra.arc3.transforms import apply_tile
+                    tiled = apply_tile(inp, fy, fx)
+                    if torch.equal(tiled, tgt):
+                        return [{"transform": TransformType.TILE, "reps_h": fy, "reps_w": fx}]
+            # Check if input is scaled version of target
+            if ih <= th and iw <= tw:
+                fy, fx = th // ih, tw // iw
+                if fy * ih == th and fx * iw == tw:
+                    from soma_mythos_ehra.arc3.transforms import apply_tile
+                    tiled = apply_tile(inp, fy, fx)
+                    if torch.equal(tiled, tgt):
+                        return [{"transform": TransformType.TILE, "reps_h": fy, "reps_w": fx}]
+        return None
+
+    def _try_rotation_heuristic(self, inputs: list[torch.Tensor], targets: list[torch.Tensor]) -> list[dict] | None:
+        """Try rotation/flip combinations."""
+        from soma_mythos_ehra.arc3.transforms import apply_rotate_90, apply_rotate_180, apply_rotate_270, apply_flip_h, apply_flip_v, apply_transpose
+        transforms = [
+            ([{"transform": TransformType.ROTATE_90}], apply_rotate_90),
+            ([{"transform": TransformType.ROTATE_180}], apply_rotate_180),
+            ([{"transform": TransformType.ROTATE_270}], apply_rotate_270),
+            ([{"transform": TransformType.FLIP_H}], apply_flip_h),
+            ([{"transform": TransformType.FLIP_V}], apply_flip_v),
+            ([{"transform": TransformType.TRANSPOSE}], apply_transpose),
+            ([{"transform": TransformType.FLIP_H}, {"transform": TransformType.ROTATE_90}],
+             lambda g: apply_rotate_90(apply_flip_h(g))),
+            ([{"transform": TransformType.FLIP_V}, {"transform": TransformType.ROTATE_90}],
+             lambda g: apply_rotate_90(apply_flip_v(g))),
+        ]
+        for seq, fn in transforms:
+            all_match = True
+            for inp, tgt in zip(inputs, targets):
+                if inp.shape != tgt.shape:
+                    all_match = False
+                    break
+                pred = fn(inp)
+                if not torch.equal(pred, tgt):
+                    all_match = False
+                    break
+            if all_match:
+                return seq
+        return None
+
+    def _try_sort_heuristic(self, inputs: list[torch.Tensor], targets: list[torch.Tensor]) -> list[dict] | None:
+        """Try sorting objects by position."""
+        for axis in [0, 1]:
+            all_match = True
+            for inp, tgt in zip(inputs, targets):
+                if inp.shape != tgt.shape:
+                    all_match = False
+                    break
+                from soma_mythos_ehra.arc3.transforms import apply_sort_objects
+                pred = apply_sort_objects(inp, axis)
+                if not torch.equal(pred, tgt):
+                    all_match = False
+                    break
+            if all_match:
+                return [{"transform": TransformType.SORT_OBJECTS, "axis": axis}]
+        return None
+
+    def _try_fill_holes_heuristic(self, inputs: list[torch.Tensor], targets: list[torch.Tensor]) -> list[dict] | None:
+        """Try filling interior holes."""
+        all_match = True
+        for inp, tgt in zip(inputs, targets):
+            if inp.shape != tgt.shape:
+                all_match = False
+                break
+            pred = apply_fill_holes(inp)
+            if not torch.equal(pred, tgt):
+                all_match = False
+                break
+        if all_match:
+            return [{"transform": TransformType.FILL_HOLES}]
+        return None
+
+    def _try_tile_heuristic(self, inputs: list[torch.Tensor], targets: list[torch.Tensor]) -> list[dict] | None:
+        """Try tiling a small pattern across the grid.
+
+        Detects if the output is a tiled version of a corner/subregion of the input.
+        """
+        for inp, tgt in zip(inputs, targets):
+            ih, iw = inp.shape
+            th, tw = tgt.shape
+            if th < ih or tw < iw:
+                continue
+            # Check all possible tile sizes
+            for tile_h in range(1, ih + 1):
+                for tile_w in range(1, iw + 1):
+                    if th % tile_h != 0 or tw % tile_w != 0:
+                        continue
+                    # Extract tile from top-left of input
+                    tile = inp[:tile_h, :tile_w]
+                    # Check if target is tiled version
+                    reps_h = th // tile_h
+                    reps_w = tw // tile_w
+                    tiled = apply_tile(tile, reps_h, reps_w)
+                    if torch.equal(tiled, tgt):
+                        return [{"transform": TransformType.TILE, "reps_h": reps_h, "reps_w": reps_w}]
+        return None
+
+    def _try_component_coloring_heuristic(self, inputs: list[torch.Tensor], targets: list[torch.Tensor]) -> list[dict] | None:
+        """Try coloring each connected component with its label number.
+
+        This handles puzzles where objects of the same color get different colors
+        based on their connected component identity (label = output color).
+        """
+        for inp, tgt in zip(inputs, targets):
+            if inp.shape != tgt.shape:
+                continue
+            labels = connected_component_labeling(inp)
+            num_components = int(labels.max().item())
+            if num_components == 0:
+                continue
+
+            # Check if output colors match labels exactly
+            match = True
+            for r in range(tgt.shape[0]):
+                for c in range(tgt.shape[1]):
+                    lbl = int(labels[r, c].item())
+                    out_val = int(tgt[r, c].item())
+                    if lbl != out_val:
+                        match = False
+                        break
+                if not match:
+                    break
+
+            if match:
+                # Build a mapping: each label becomes its number
+                # We need to encode this as a special transform
+                # Since COLOR_MAP can't do per-pixel mapping, we use a custom approach
+                return [{"transform": TransformType.COLOR_MAP, "color_map": labels, "type": "component_labeling"}]
+
+        return None
 
     def _search(self, inputs: list[torch.Tensor], targets: list[torch.Tensor]) -> list[dict] | None:
         root = ARC3Node()
@@ -154,6 +333,19 @@ class ARC3Solver:
             return [{"reps_h": r, "reps_w": r} for r in [2, 3]]
         if t == TransformType.WRAP_AROUND:
             return [{"shift": s, "axis": a} for s in [1, -1] for a in [0, 1]]
+        if t == TransformType.MOVE_OBJECT:
+            # Try moving the first few objects in small directions
+            params = []
+            for inp in inputs[:1]:  # Only first train pair for speed
+                objects = extract_objects(inp)
+                for obj in objects[:3]:  # Max 3 objects
+                    for dy, dx in [(-1, 0), (1, 0), (0, -1), (0, 1), (-2, 0), (2, 0), (0, -2), (0, 2)]:
+                        params.append({"obj_label": obj.label, "dy": dy, "dx": dx})
+            return params[:12]  # Limit
+        if t == TransformType.FILL_HOLES:
+            return [{}]
+        if t == TransformType.SORT_OBJECTS:
+            return [{"axis": 0}, {"axis": 1}]
         return [{}]
 
     def _backprop(self, node: ARC3Node, value: float) -> None:

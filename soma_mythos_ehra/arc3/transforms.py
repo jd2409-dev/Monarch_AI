@@ -25,10 +25,13 @@ class TransformType(IntEnum):
     TILE = 10           # Tile/repeat pattern
     INVERT_COLORS = 11  # Invert all non-zero colors
     WRAP_AROUND = 12    # Cyclic shift of rows/cols
+    MOVE_OBJECT = 13    # Move a specific object by (dy, dx)
+    FILL_HOLES = 14     # Fill interior holes in objects
+    SORT_OBJECTS = 15   # Sort objects by position/size
 
 
 # Total action space size
-NUM_TRANSFORMS = 13
+NUM_TRANSFORMS = 16
 
 
 def apply_color_map(grid: torch.Tensor, src: int, dst: int) -> torch.Tensor:
@@ -134,6 +137,139 @@ def apply_wrap_around(grid: torch.Tensor, shift: int = 1, axis: int = 0) -> torc
     return torch.roll(grid, shifts=shift, dims=axis)
 
 
+def apply_move_object(grid: torch.Tensor, obj_label: int, dy: int, dx: int) -> torch.Tensor:
+    """Move a specific connected component by (dy, dx).
+
+    Uses connected component labeling to find the object with the given label,
+    then shifts all its pixels.
+    """
+    from soma_mythos_ehra.arc3.objects import connected_component_labeling
+    H, W = grid.shape
+    labels = connected_component_labeling(grid)
+    mask = (labels == obj_label)
+    if not mask.any():
+        return grid
+
+    out = grid.clone()
+    # Clear old position
+    out[mask] = 0
+    # Paint new position
+    pixel_coords = mask.nonzero(as_tuple=False)
+    for p in pixel_coords:
+        r, c = p[0].item(), p[1].item()
+        nr, nc = r + dy, c + dx
+        if 0 <= nr < H and 0 <= nc < W:
+            out[nr, nc] = grid[r, c]
+    return out
+
+
+def apply_fill_holes(grid: torch.Tensor) -> torch.Tensor:
+    """Fill interior holes (background pockets fully enclosed by non-background).
+
+    Uses flood fill from edges to find all reachable background cells,
+    then fills unreachable background cells with the surrounding color.
+    """
+    H, W = grid.shape
+    background = 0
+
+    # BFS from all edge background cells
+    reachable = torch.zeros(H, W, dtype=torch.bool)
+    stack = []
+    for r in range(H):
+        for c in [0, W - 1]:
+            if int(grid[r, c].item()) == background:
+                stack.append((r, c))
+    for c in range(W):
+        for r in [0, H - 1]:
+            if int(grid[r, c].item()) == background:
+                stack.append((r, c))
+
+    while stack:
+        r, c = stack.pop()
+        if r < 0 or r >= H or c < 0 or c >= W:
+            continue
+        if reachable[r, c]:
+            continue
+        if int(grid[r, c].item()) != background:
+            continue
+        reachable[r, c] = True
+        stack.extend([(r-1, c), (r+1, c), (r, c-1), (r, c+1)])
+
+    # Fill unreachable background with nearest non-background color
+    out = grid.clone()
+    for r in range(H):
+        for c in range(W):
+            if int(grid[r, c].item()) == background and not reachable[r, c]:
+                # Find nearest non-background neighbor
+                for radius in range(1, max(H, W)):
+                    found = False
+                    for dr in range(-radius, radius + 1):
+                        for dc in range(-radius, radius + 1):
+                            if abs(dr) != radius and abs(dc) != radius:
+                                continue
+                            nr, nc = r + dr, c + dc
+                            if 0 <= nr < H and 0 <= nc < W:
+                                val = int(grid[nr, nc].item())
+                                if val != background:
+                                    out[r, c] = val
+                                    found = True
+                                    break
+                        if found:
+                            break
+                    if found:
+                        break
+    return out
+
+
+def apply_sort_objects(grid: torch.Tensor, axis: int = 0) -> torch.Tensor:
+    """Sort objects by their position along an axis and rearrange them.
+
+    Objects are extracted, sorted by centroid position, and placed back
+    in a grid with even spacing.
+    """
+    from soma_mythos_ehra.arc3.objects import extract_objects
+    H, W = grid.shape
+    objects = extract_objects(grid)
+    if not objects:
+        return grid
+
+    # Sort by centroid along specified axis
+    objects.sort(key=lambda o: o.centroid[axis])
+
+    out = torch.zeros_like(grid)
+    # Place objects with even spacing
+    total_height = sum(o.bbox[1] - o.bbox[0] + 1 for o in objects)
+    total_width = max(o.bbox[3] - o.bbox[2] + 1 for o in objects) if objects else 0
+
+    if axis == 0:  # Sort vertically
+        y_offset = max(0, (H - total_height) // (len(objects) + 1)) if objects else 0
+        current_y = max(0, (H - total_height) // 2)
+        for obj in objects:
+            obj_h = obj.bbox[1] - obj.bbox[0] + 1
+            obj_w = obj.bbox[3] - obj.bbox[2] + 1
+            x_offset = max(0, (W - obj_w) // 2)
+            for py, px in obj.pixels:
+                new_y = current_y + (py - obj.bbox[0])
+                new_x = x_offset + (px - obj.bbox[2])
+                if 0 <= new_y < H and 0 <= new_x < W:
+                    out[new_y, new_x] = grid[py, px]
+            current_y += obj_h + max(1, (H - total_height) // (len(objects) + 1))
+    else:  # Sort horizontally
+        current_x = max(0, (W - total_width) // 2)
+        for obj in objects:
+            obj_h = obj.bbox[1] - obj.bbox[0] + 1
+            obj_w = obj.bbox[3] - obj.bbox[2] + 1
+            y_offset = max(0, (H - obj_h) // 2)
+            for py, px in obj.pixels:
+                new_y = y_offset + (py - obj.bbox[0])
+                new_x = current_x + (px - obj.bbox[2])
+                if 0 <= new_y < H and 0 <= new_x < W:
+                    out[new_y, new_x] = grid[py, px]
+            current_x += obj_w + max(1, (W - total_width) // (len(objects) + 1))
+
+    return out
+
+
 # ---------------------------------------------------------------------------
 # Unified apply function
 # ---------------------------------------------------------------------------
@@ -191,6 +327,16 @@ def apply_transform(
         shift = kwargs.get("shift", 1)
         axis = kwargs.get("axis", 0)
         return apply_wrap_around(grid, shift, axis)
+    elif transform == TransformType.MOVE_OBJECT:
+        obj_label = kwargs.get("obj_label", 1)
+        dy = kwargs.get("dy", 0)
+        dx = kwargs.get("dx", 0)
+        return apply_move_object(grid, obj_label, dy, dx)
+    elif transform == TransformType.FILL_HOLES:
+        return apply_fill_holes(grid)
+    elif transform == TransformType.SORT_OBJECTS:
+        axis = kwargs.get("axis", 0)
+        return apply_sort_objects(grid, axis)
     else:
         raise ValueError(f"Unknown transform: {transform}")
 
@@ -212,9 +358,15 @@ def apply_sequence(grid: torch.Tensor, sequence: list[dict]) -> torch.Tensor:
         transform = step["transform"]
         # Handle atomic color map (applied simultaneously to avoid circular deps)
         if "color_map" in step:
-            old = state.clone()
-            for src, dst in step["color_map"].items():
-                state[old == src] = dst
+            cm = step["color_map"]
+            # Special case: component labeling (compute labels dynamically)
+            if step.get("type") == "component_labeling":
+                from soma_mythos_ehra.arc3.objects import connected_component_labeling
+                state = connected_component_labeling(state)
+            else:
+                old = state.clone()
+                for src, dst in cm.items():
+                    state[old == src] = dst
             continue
         kwargs = {k: v for k, v in step.items() if k != "transform"}
         state = apply_transform(state, transform, **kwargs)
