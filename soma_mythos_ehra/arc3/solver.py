@@ -10,6 +10,7 @@ import torch
 from soma_mythos_ehra.arc3.adapter import ARC3Task
 from soma_mythos_ehra.arc3.beam_search import GuidedBeamSynthesizer, BeamConfig
 from soma_mythos_ehra.arc3.dsl_kernel import DSLKernel, DSLNode
+from soma_mythos_ehra.arc3.grammar_synthesis import GrammarSynthesizer, SynthesisConfig
 from soma_mythos_ehra.arc3.objects import extract_objects, connected_component_labeling
 from soma_mythos_ehra.arc3.transforms import (
     NUM_TRANSFORMS,
@@ -126,6 +127,11 @@ class ARC3Solver:
         dsl_result = self._try_dsl_heuristic(train_inputs, train_outputs)
         if dsl_result is not None:
             return dsl_result
+
+        # Heuristic 12: Grammar synthesis (token-level beam search)
+        synth_result = self._try_grammar_synthesis_heuristic(train_inputs, train_outputs)
+        if synth_result is not None:
+            return synth_result
 
         # Fallback: return partial color map
         if color_map:
@@ -373,6 +379,35 @@ class ARC3Solver:
             correct, _ = synth.kernel.execute_on_pairs(program, inputs, targets)
             if correct == len(inputs):
                 return [{"transform": TransformType.COLOR_MAP, "dsl_program": program, "type": "dsl"}]
+        return None
+
+    def _try_grammar_synthesis_heuristic(self, inputs: list[torch.Tensor], targets: list[torch.Tensor]) -> list[dict] | None:
+        """Try grammar synthesis (token-level beam search)."""
+        synth = GrammarSynthesizer(SynthesisConfig(
+            beam_width=15,
+            max_depth=6,
+            timeout=5.0,
+        ))
+
+        class MiniTask:
+            def __init__(self, inp, out):
+                self._inputs = inp
+                self._outputs = out
+                self.task_id = "inline"
+            def get_train_inputs(self):
+                return self._inputs
+            def get_train_outputs(self):
+                return self._outputs
+            def get_test_input(self):
+                return None
+
+        task = MiniTask(inputs, targets)
+        program = synth.synthesize(task)
+
+        if program is not None:
+            correct, _ = synth.executor.execute_on_pairs(program, inputs, targets)
+            if correct == len(inputs):
+                return [{"transform": TransformType.COLOR_MAP, "dsl_program": program, "type": "grammar_synthesis"}]
         return None
 
     def _search(self, inputs: list[torch.Tensor], targets: list[torch.Tensor]) -> list[dict] | None:
