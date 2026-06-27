@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 import torch
 
 from soma_mythos_ehra.arc3.adapter import ARC3Task
+from soma_mythos_ehra.arc3.dsl_kernel import DSLKernel, DSLNode
 from soma_mythos_ehra.arc3.objects import extract_objects, connected_component_labeling
 from soma_mythos_ehra.arc3.transforms import (
     NUM_TRANSFORMS,
@@ -120,10 +121,10 @@ class ARC3Solver:
         if centroid_result is not None:
             return centroid_result
 
-        # Full MCTS search
-        result = self._search(train_inputs, train_outputs)
-        if result is not None:
-            return result
+        # Heuristic 11: DSL program synthesis (fast templates only)
+        dsl_result = self._try_dsl_heuristic(train_inputs, train_outputs)
+        if dsl_result is not None:
+            return dsl_result
 
         # Fallback: return partial color map
         if color_map:
@@ -340,6 +341,79 @@ class ARC3Solver:
             if all_match:
                 return [{"transform": TransformType.SORT_BY_CENTROID, "axis": axis}]
         return None
+
+    def _try_dsl_heuristic(self, inputs: list[torch.Tensor], targets: list[torch.Tensor]) -> list[dict] | None:
+        """Try DSL program templates for common ARC patterns."""
+        kernel = DSLKernel(background=0)
+        templates = self._dsl_templates()
+
+        for prog in templates:
+            correct, _ = kernel.execute_on_pairs(prog, inputs, targets)
+            if correct == len(inputs):
+                # Store the DSL program as a special transform
+                return [{"transform": TransformType.COLOR_MAP, "dsl_program": prog, "type": "dsl"}]
+        return None
+
+    def _dsl_templates(self) -> list[DSLNode]:
+        """Generate DSL program templates for common patterns."""
+        templates = []
+
+        # Objects -> recolor by size
+        templates.append(DSLNode(
+            primitive="compose",
+            children=[
+                DSLNode(primitive="objects"),
+                DSLNode(primitive="recolor_by_size"),
+            ],
+        ))
+
+        # Objects -> sort by position -> recolor by size
+        for axis in [0, 1]:
+            templates.append(DSLNode(
+                primitive="compose",
+                children=[
+                    DSLNode(primitive="objects"),
+                    DSLNode(primitive="sort_by_position", params={"axis": axis}),
+                    DSLNode(primitive="recolor_by_size"),
+                ],
+            ))
+
+        # Objects -> filter by area -> recolor
+        for color in range(1, 5):
+            templates.append(DSLNode(
+                primitive="apply_to_objects",
+                children=[
+                    DSLNode(primitive="filter_by_area", params={"mode": "max"}),
+                    DSLNode(primitive="recolor_objects", params={"color": color}),
+                ],
+            ))
+
+        # Fill holes
+        templates.append(DSLNode(primitive="fill_holes"))
+
+        # Rotate -> recolor by size
+        for angle in [90, 180, 270]:
+            templates.append(DSLNode(
+                primitive="compose",
+                children=[
+                    DSLNode(primitive="rotate", params={"angle": angle}),
+                    DSLNode(primitive="objects"),
+                    DSLNode(primitive="recolor_by_size"),
+                ],
+            ))
+
+        # Flip -> recolor by size
+        for axis in ["h", "v"]:
+            templates.append(DSLNode(
+                primitive="compose",
+                children=[
+                    DSLNode(primitive="flip", params={"axis": axis}),
+                    DSLNode(primitive="objects"),
+                    DSLNode(primitive="recolor_by_size"),
+                ],
+            ))
+
+        return templates
 
     def _search(self, inputs: list[torch.Tensor], targets: list[torch.Tensor]) -> list[dict] | None:
         root = ARC3Node()

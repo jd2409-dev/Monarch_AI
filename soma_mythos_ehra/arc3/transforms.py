@@ -470,6 +470,13 @@ def apply_sequence(grid: torch.Tensor, sequence: list[dict]) -> torch.Tensor:
             if step.get("type") == "component_labeling":
                 from soma_mythos_ehra.arc3.objects import connected_component_labeling
                 state = connected_component_labeling(state)
+            # Special case: DSL program execution
+            elif step.get("type") == "dsl" and "dsl_program" in step:
+                from soma_mythos_ehra.arc3.dsl_kernel import DSLKernel
+                kernel = DSLKernel(background=0)
+                result = kernel.execute(step["dsl_program"], state)
+                if result is not None:
+                    state = result
             else:
                 old = state.clone()
                 for src, dst in cm.items():
