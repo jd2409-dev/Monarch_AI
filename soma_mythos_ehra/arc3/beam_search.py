@@ -16,6 +16,7 @@ from soma_mythos_ehra.arc3.adapter import ARC3Task
 from soma_mythos_ehra.arc3.dsl_grammar import DSLNode, PRIMITIVES
 from soma_mythos_ehra.arc3.dsl_kernel import DSLKernel
 from soma_mythos_ehra.arc3.spatial_classifier import SpatialDiffClassifier
+from soma_mythos_ehra.arc3.template_library import build_template_library
 
 
 @dataclass
@@ -43,6 +44,7 @@ class GuidedBeamSynthesizer:
         self.config = config or BeamConfig()
         self.classifier = SpatialDiffClassifier()
         self.kernel = DSLKernel(background=0)
+        self.templates = build_template_library()
 
     def synthesize(self, task: ARC3Task) -> DSLNode | None:
         """Search for a DSL program that solves the task."""
@@ -53,15 +55,23 @@ class GuidedBeamSynthesizer:
 
         start_time = time.time()
 
-        # Step 1: Get primitive probabilities from classifier
+        # Step 1: Try template library first (fast path)
+        for name, prog in self.templates:
+            if time.time() - start_time > self.config.timeout:
+                break
+            correct, _ = self.kernel.execute_on_pairs(prog, train_inputs, train_outputs)
+            if correct == len(train_inputs):
+                return prog
+
+        # Step 2: Get primitive probabilities from classifier
         primitive_probs = self.classifier.predict_batch(train_inputs, train_outputs)
 
-        # Step 2: Get top-K primitive indices
+        # Step 3: Get top-K primitive indices
         top_k = min(self.config.top_k_primitives, len(PRIMITIVES))
         top_indices = torch.argsort(primitive_probs, descending=True)[:top_k]
         top_names = [list(PRIMITIVES.keys())[i] for i in top_indices if i < len(PRIMITIVES)]
 
-        # Step 3: Generate initial candidates (single primitives)
+        # Step 4: Generate initial candidates (single primitives)
         beam = []
         for name in top_names:
             prim = PRIMITIVES.get(name)
@@ -75,7 +85,7 @@ class GuidedBeamSynthesizer:
             if correct == len(train_inputs):
                 return prog
 
-        # Step 4: Beam search with depth expansion
+        # Step 5: Beam search with depth expansion
         for depth in range(1, self.config.max_depth):
             if time.time() - start_time > self.config.timeout:
                 break
