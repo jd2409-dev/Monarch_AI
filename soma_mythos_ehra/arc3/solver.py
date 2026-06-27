@@ -15,6 +15,9 @@ from soma_mythos_ehra.arc3.transforms import (
     apply_sequence,
     apply_fill_holes,
     apply_tile,
+    apply_recolor_by_size,
+    apply_sort_by_density,
+    apply_sort_by_centroid,
 )
 
 
@@ -101,6 +104,21 @@ class ARC3Solver:
         comp_result = self._try_component_coloring_heuristic(train_inputs, train_outputs)
         if comp_result is not None:
             return comp_result
+
+        # Heuristic 8: Recolor by size
+        size_result = self._try_recolor_by_size_heuristic(train_inputs, train_outputs)
+        if size_result is not None:
+            return size_result
+
+        # Heuristic 9: Sort by density
+        density_result = self._try_sort_by_density_heuristic(train_inputs, train_outputs)
+        if density_result is not None:
+            return density_result
+
+        # Heuristic 10: Sort by centroid
+        centroid_result = self._try_sort_by_centroid_heuristic(train_inputs, train_outputs)
+        if centroid_result is not None:
+            return centroid_result
 
         # Full MCTS search
         result = self._search(train_inputs, train_outputs)
@@ -270,11 +288,57 @@ class ARC3Solver:
                     break
 
             if match:
-                # Build a mapping: each label becomes its number
-                # We need to encode this as a special transform
-                # Since COLOR_MAP can't do per-pixel mapping, we use a custom approach
                 return [{"transform": TransformType.COLOR_MAP, "color_map": labels, "type": "component_labeling"}]
 
+        return None
+
+    def _try_recolor_by_size_heuristic(self, inputs: list[torch.Tensor], targets: list[torch.Tensor]) -> list[dict] | None:
+        """Try recoloring objects based on their size ordering.
+
+        Largest object gets color 1, second largest gets color 2, etc.
+        """
+        all_match = True
+        for inp, tgt in zip(inputs, targets):
+            if inp.shape != tgt.shape:
+                all_match = False
+                break
+            pred = apply_recolor_by_size(inp)
+            if not torch.equal(pred, tgt):
+                all_match = False
+                break
+        if all_match:
+            return [{"transform": TransformType.RECOLOR_BY_SIZE}]
+        return None
+
+    def _try_sort_by_density_heuristic(self, inputs: list[torch.Tensor], targets: list[torch.Tensor]) -> list[dict] | None:
+        """Try sorting objects by density (solidness)."""
+        all_match = True
+        for inp, tgt in zip(inputs, targets):
+            if inp.shape != tgt.shape:
+                all_match = False
+                break
+            pred = apply_sort_by_density(inp)
+            if not torch.equal(pred, tgt):
+                all_match = False
+                break
+        if all_match:
+            return [{"transform": TransformType.SORT_BY_DENSITY}]
+        return None
+
+    def _try_sort_by_centroid_heuristic(self, inputs: list[torch.Tensor], targets: list[torch.Tensor]) -> list[dict] | None:
+        """Try sorting objects by centroid position."""
+        for axis in [0, 1]:
+            all_match = True
+            for inp, tgt in zip(inputs, targets):
+                if inp.shape != tgt.shape:
+                    all_match = False
+                    break
+                pred = apply_sort_by_centroid(inp, axis)
+                if not torch.equal(pred, tgt):
+                    all_match = False
+                    break
+            if all_match:
+                return [{"transform": TransformType.SORT_BY_CENTROID, "axis": axis}]
         return None
 
     def _search(self, inputs: list[torch.Tensor], targets: list[torch.Tensor]) -> list[dict] | None:
@@ -334,17 +398,22 @@ class ARC3Solver:
         if t == TransformType.WRAP_AROUND:
             return [{"shift": s, "axis": a} for s in [1, -1] for a in [0, 1]]
         if t == TransformType.MOVE_OBJECT:
-            # Try moving the first few objects in small directions
             params = []
-            for inp in inputs[:1]:  # Only first train pair for speed
+            for inp in inputs[:1]:
                 objects = extract_objects(inp)
-                for obj in objects[:3]:  # Max 3 objects
-                    for dy, dx in [(-1, 0), (1, 0), (0, -1), (0, 1), (-2, 0), (2, 0), (0, -2), (0, 2)]:
+                for obj in objects[:3]:
+                    for dy, dx in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
                         params.append({"obj_label": obj.label, "dy": dy, "dx": dx})
-            return params[:12]  # Limit
+            return params[:12]
         if t == TransformType.FILL_HOLES:
             return [{}]
         if t == TransformType.SORT_OBJECTS:
+            return [{"axis": 0}, {"axis": 1}]
+        if t == TransformType.RECOLOR_BY_SIZE:
+            return [{}]
+        if t == TransformType.SORT_BY_DENSITY:
+            return [{}]
+        if t == TransformType.SORT_BY_CENTROID:
             return [{"axis": 0}, {"axis": 1}]
         return [{}]
 

@@ -28,10 +28,13 @@ class TransformType(IntEnum):
     MOVE_OBJECT = 13    # Move a specific object by (dy, dx)
     FILL_HOLES = 14     # Fill interior holes in objects
     SORT_OBJECTS = 15   # Sort objects by position/size
+    RECOLOR_BY_SIZE = 16    # Recolor objects based on size ordering
+    SORT_BY_DENSITY = 17    # Sort objects by density (solidness)
+    SORT_BY_CENTROID = 18   # Sort objects by centroid position
 
 
 # Total action space size
-NUM_TRANSFORMS = 16
+NUM_TRANSFORMS = 19
 
 
 def apply_color_map(grid: torch.Tensor, src: int, dst: int) -> torch.Tensor:
@@ -270,6 +273,103 @@ def apply_sort_objects(grid: torch.Tensor, axis: int = 0) -> torch.Tensor:
     return out
 
 
+def apply_recolor_by_size(grid: torch.Tensor) -> torch.Tensor:
+    """Recolor objects based on their size ordering.
+
+    Largest object gets color 1, second largest gets color 2, etc.
+    """
+    from soma_mythos_ehra.arc3.objects import extract_objects
+    objects = extract_objects(grid)
+    if not objects:
+        return grid
+
+    # Sort by area (descending)
+    objects.sort(key=lambda o: o.area, reverse=True)
+
+    out = grid.clone()
+    for i, obj in enumerate(objects):
+        new_color = i + 1
+        for py, px in obj.pixels:
+            out[py, px] = new_color
+
+    return out
+
+
+def apply_sort_by_density(grid: torch.Tensor) -> torch.Tensor:
+    """Sort objects by density (solidness) and rearrange them.
+
+    Densest objects go to top-left, least dense to bottom-right.
+    """
+    from soma_mythos_ehra.arc3.objects import extract_objects
+    H, W = grid.shape
+    objects = extract_objects(grid)
+    if not objects:
+        return grid
+
+    # Sort by density (descending)
+    objects.sort(key=lambda o: o.density, reverse=True)
+
+    out = torch.zeros_like(grid)
+    current_y = 0
+    for obj in objects:
+        obj_h = obj.bbox[1] - obj.bbox[0] + 1
+        obj_w = obj.bbox[3] - obj.bbox[2] + 1
+        if current_y + obj_h > H:
+            current_y = 0
+        for py, px in obj.pixels:
+            new_y = current_y + (py - obj.bbox[0])
+            new_x = (px - obj.bbox[2])
+            if 0 <= new_y < H and 0 <= new_x < W:
+                out[new_y, new_x] = grid[py, px]
+        current_y += obj_h + 1
+
+    return out
+
+
+def apply_sort_by_centroid(grid: torch.Tensor, axis: int = 0) -> torch.Tensor:
+    """Sort objects by centroid position and rearrange them.
+
+    axis=0: sort by row (top to bottom)
+    axis=1: sort by column (left to right)
+    """
+    from soma_mythos_ehra.arc3.objects import extract_objects
+    H, W = grid.shape
+    objects = extract_objects(grid)
+    if not objects:
+        return grid
+
+    # Sort by centroid along axis
+    objects.sort(key=lambda o: o.centroid[axis])
+
+    out = torch.zeros_like(grid)
+    if axis == 0:  # Vertical sort
+        current_y = 0
+        for obj in objects:
+            obj_h = obj.bbox[1] - obj.bbox[0] + 1
+            obj_w = obj.bbox[3] - obj.bbox[2] + 1
+            x_offset = max(0, (W - obj_w) // 2)
+            for py, px in obj.pixels:
+                new_y = current_y + (py - obj.bbox[0])
+                new_x = x_offset + (px - obj.bbox[2])
+                if 0 <= new_y < H and 0 <= new_x < W:
+                    out[new_y, new_x] = grid[py, px]
+            current_y += obj_h + 1
+    else:  # Horizontal sort
+        current_x = 0
+        for obj in objects:
+            obj_h = obj.bbox[1] - obj.bbox[0] + 1
+            obj_w = obj.bbox[3] - obj.bbox[2] + 1
+            y_offset = max(0, (H - obj_h) // 2)
+            for py, px in obj.pixels:
+                new_y = y_offset + (py - obj.bbox[0])
+                new_x = current_x + (px - obj.bbox[2])
+                if 0 <= new_y < H and 0 <= new_x < W:
+                    out[new_y, new_x] = grid[py, px]
+            current_x += obj_w + 1
+
+    return out
+
+
 # ---------------------------------------------------------------------------
 # Unified apply function
 # ---------------------------------------------------------------------------
@@ -337,6 +437,13 @@ def apply_transform(
     elif transform == TransformType.SORT_OBJECTS:
         axis = kwargs.get("axis", 0)
         return apply_sort_objects(grid, axis)
+    elif transform == TransformType.RECOLOR_BY_SIZE:
+        return apply_recolor_by_size(grid)
+    elif transform == TransformType.SORT_BY_DENSITY:
+        return apply_sort_by_density(grid)
+    elif transform == TransformType.SORT_BY_CENTROID:
+        axis = kwargs.get("axis", 0)
+        return apply_sort_by_centroid(grid, axis)
     else:
         raise ValueError(f"Unknown transform: {transform}")
 

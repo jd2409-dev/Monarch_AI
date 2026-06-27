@@ -12,7 +12,7 @@ import torch
 
 @dataclass
 class ARCObject:
-    """A detected object in the grid."""
+    """A detected object in the grid with geometric metadata."""
     color: int
     label: int
     bbox: tuple[int, int, int, int]  # ymin, ymax, xmin, xmax
@@ -20,6 +20,12 @@ class ARCObject:
     mask: torch.Tensor
     area: int
     pixels: list[tuple[int, int]]
+    # Geometric invariants
+    density: float = 0.0      # area / bbox_area (solidness)
+    aspect_ratio: float = 1.0  # height / width
+    bbox_area: int = 0         # height * width
+    height: int = 0
+    width: int = 0
 
 
 def connected_component_labeling(grid: torch.Tensor, background: int = 0) -> torch.Tensor:
@@ -57,7 +63,8 @@ def connected_component_labeling(grid: torch.Tensor, background: int = 0) -> tor
 def extract_objects(grid: torch.Tensor, background: int = 0) -> list[ARCObject]:
     """Extract all discrete objects from a grid tensor.
 
-    Returns a list of ARCObject with bounding boxes, centroids, masks, and area.
+    Returns a list of ARCObject with bounding boxes, centroids, masks,
+    area, and geometric invariants (density, aspect_ratio).
     """
     H, W = grid.shape
     labels = connected_component_labeling(grid, background)
@@ -77,6 +84,15 @@ def extract_objects(grid: torch.Tensor, background: int = 0) -> list[ARCObject]:
         ymin, ymax = row_indices[0].item(), row_indices[-1].item()
         xmin, xmax = col_indices[0].item(), col_indices[-1].item()
         area = int(mask.sum().item())
+
+        # Bounding box dimensions
+        height = ymax - ymin + 1
+        width = xmax - xmin + 1
+        bbox_area = height * width
+
+        # Geometric invariants
+        density = area / bbox_area if bbox_area > 0 else 0.0
+        aspect_ratio = height / width if width > 0 else 1.0
 
         # Get color from the original grid
         color_vals = grid[mask]
@@ -98,6 +114,11 @@ def extract_objects(grid: torch.Tensor, background: int = 0) -> list[ARCObject]:
             mask=mask[ymin:ymax+1, xmin:xmax+1],
             area=area,
             pixels=pixels,
+            density=density,
+            aspect_ratio=aspect_ratio,
+            bbox_area=bbox_area,
+            height=height,
+            width=width,
         ))
 
     return objects
