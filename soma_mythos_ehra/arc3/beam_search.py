@@ -1,7 +1,7 @@
 """Guided Beam Search Synthesizer — uses classifier priors and execution pruning.
 
 Replaces MCTS with a prioritized beam search that:
-1. Uses spatial-diff classifier to predict likely primitives
+1. Uses the 31-token grammar predictor to score templates via dot product
 2. Executes candidates on train pairs to verify correctness
 3. Prunes invalid branches immediately
 """
@@ -13,8 +13,10 @@ from dataclasses import dataclass, field
 import torch
 
 from soma_mythos_ehra.arc3.adapter import ARC3Task
+from soma_mythos_ehra.arc3.dataset_generator import extract_structural_features
 from soma_mythos_ehra.arc3.dsl_grammar import DSLNode, PRIMITIVES
 from soma_mythos_ehra.arc3.dsl_kernel import DSLKernel
+from soma_mythos_ehra.arc3.jepa_predictor import JEPA_template_router
 from soma_mythos_ehra.arc3.spatial_classifier import SpatialDiffClassifier
 from soma_mythos_ehra.arc3.template_library import build_template_library
 
@@ -38,13 +40,22 @@ class BeamCandidate:
 
 
 class GuidedBeamSynthesizer:
-    """Beam search synthesizer with classifier-guided primitive selection."""
+    """Beam search synthesizer with 104-class template predictor guidance."""
 
     def __init__(self, config: BeamConfig | None = None) -> None:
         self.config = config or BeamConfig()
         self.classifier = SpatialDiffClassifier()
         self.kernel = DSLKernel(background=0)
         self.templates = build_template_library()
+
+        # Load the 104-class template predictor
+        self.template_predictor = JEPA_template_router(feature_dim=32, num_classes=len(self.templates))
+        self.has_predictor = False
+        try:
+            self.template_predictor.load("checkpoints/jepa_template_predictor_104.pt")
+            self.has_predictor = True
+        except Exception:
+            pass
 
     def synthesize(self, task: ARC3Task) -> DSLNode | None:
         """Search for a DSL program that solves the task."""
@@ -55,23 +66,33 @@ class GuidedBeamSynthesizer:
 
         start_time = time.time()
 
-        # Step 1: Try template library first (fast path)
-        for name, prog in self.templates:
+        # Step 1: Score templates using 104-class predictor (Method 2)
+        if self.has_predictor and train_inputs:
+            features = extract_structural_features(train_inputs[0], train_outputs[0])
+            with torch.no_grad():
+                top_indices, top_probs = self.template_predictor.predict_top_k(features.unsqueeze(0), k=len(self.templates))
+            # Flatten sorted indices by probability
+            sorted_indices = top_indices.squeeze(0)
+        else:
+            sorted_indices = torch.arange(len(self.templates))
+
+        # Step 2: Try templates in predicted order
+        for idx in sorted_indices:
             if time.time() - start_time > self.config.timeout:
                 break
-            correct, _ = self.kernel.execute_on_pairs(prog, train_inputs, train_outputs)
-            if correct == len(train_inputs):
-                return prog
+            i = idx.item()
+            if i < len(self.templates):
+                name, prog = self.templates[i]
+                correct, _ = self.kernel.execute_on_pairs(prog, train_inputs, train_outputs)
+                if correct == len(train_inputs):
+                    return prog
 
-        # Step 2: Get primitive probabilities from classifier
+        # Step 3: Fallback to beam search with primitives
         primitive_probs = self.classifier.predict_batch(train_inputs, train_outputs)
-
-        # Step 3: Get top-K primitive indices
         top_k = min(self.config.top_k_primitives, len(PRIMITIVES))
-        top_indices = torch.argsort(primitive_probs, descending=True)[:top_k]
-        top_names = [list(PRIMITIVES.keys())[i] for i in top_indices if i < len(PRIMITIVES)]
+        top_indices_prim = torch.argsort(primitive_probs, descending=True)[:top_k]
+        top_names = [list(PRIMITIVES.keys())[i] for i in top_indices_prim if i < len(PRIMITIVES)]
 
-        # Step 4: Generate initial candidates (single primitives)
         beam = []
         for name in top_names:
             prim = PRIMITIVES.get(name)
@@ -85,41 +106,32 @@ class GuidedBeamSynthesizer:
             if correct == len(train_inputs):
                 return prog
 
-        # Step 5: Beam search with depth expansion
+        # Beam search
         for depth in range(1, self.config.max_depth):
             if time.time() - start_time > self.config.timeout:
                 break
-
             candidates = []
             for cand in beam:
                 if time.time() - start_time > self.config.timeout:
                     break
-
                 for name in top_names:
                     if time.time() - start_time > self.config.timeout:
                         break
-
                     prim = PRIMITIVES.get(name)
                     if prim is None:
                         continue
-
                     new_prog = self._extend_program(cand.program, name)
                     if new_prog is None:
                         continue
-
                     correct, _ = self.kernel.execute_on_pairs(new_prog, train_inputs, train_outputs)
-
                     if correct <= cand.correct_pairs:
                         continue
-
                     prim_idx = list(PRIMITIVES.keys()).index(name) if name in PRIMITIVES else 0
                     score = correct + float(primitive_probs[prim_idx]) * 0.5
                     candidate = BeamCandidate(program=new_prog, score=score, correct_pairs=correct)
                     candidates.append(candidate)
-
                     if correct == len(train_inputs):
                         return new_prog
-
             candidates.sort(key=lambda c: c.score, reverse=True)
             beam = candidates[:self.config.beam_width]
 
@@ -136,22 +148,18 @@ class GuidedBeamSynthesizer:
 
         new_node = DSLNode(primitive=prim_name, params=self._default_params(prim_name))
 
-        # If program is empty, return the new node
         if program.primitive == "compose" and not program.children:
             return new_node
 
-        # If program is a single primitive, wrap in compose
         if program.primitive != "compose":
             return DSLNode(
                 primitive="compose",
                 children=[program, new_node],
             )
 
-        # If program is compose, check depth limit
         if program.depth() >= self.config.max_depth:
             return None
 
-        # Add as new child
         return DSLNode(
             primitive="compose",
             children=program.children + [new_node],
@@ -183,14 +191,7 @@ class GuidedBeamSynthesizer:
 
 
 def beam_search_task(task: ARC3Task, config: BeamConfig | None = None) -> dict:
-    """Solve an ARC task using guided beam search.
-
-    Returns a dict with:
-        - "program": the synthesized DSL program AST
-        - "program_str": string representation
-        - "test_output": the predicted test output grid
-        - "train_accuracy": fraction of train pairs solved
-    """
+    """Solve an ARC task using guided beam search."""
     synth = GuidedBeamSynthesizer(config)
     train_inputs = task.get_train_inputs()
     train_outputs = task.get_train_outputs()
