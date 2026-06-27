@@ -222,8 +222,9 @@ def main() -> None:
     train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True)
     val_loader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False)
 
-    # Create model
-    model = JEPAWorldModel(num_symbols=17, num_actions=8, latent_dim=64).to(device)
+    # Create model (4-channel for multi-channel grids, 17 symbols for CellType range)
+    in_channels = 4
+    model = JEPAWorldModel(num_symbols=17, num_actions=8, latent_dim=64, in_channels=in_channels).to(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=0.01)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs)
 
@@ -279,6 +280,7 @@ def main() -> None:
                     "num_symbols": 17,
                     "num_actions": 8,
                     "latent_dim": 64,
+                    "in_channels": in_channels,
                     "grid_h": args.grid_h,
                     "grid_w": args.grid_w,
                 },

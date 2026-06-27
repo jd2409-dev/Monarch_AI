@@ -185,7 +185,7 @@ def parse_synthetic_recording(
 ) -> list[tuple[torch.Tensor, int, torch.Tensor]]:
     """Parse a synthetic recording JSONL file into (state, action, next_state) triples.
 
-    Each line has: {"grid": [[...]], "action": int, "next_grid": [[...]]}
+    Supports both single-channel and multi-channel (mc_grid/mc_next_grid) formats.
     """
     transitions: list[tuple[torch.Tensor, int, torch.Tensor]] = []
 
@@ -202,9 +202,32 @@ def parse_synthetic_recording(
             if "grid" not in entry or "next_grid" not in entry or "action" not in entry:
                 continue
 
+            action = int(entry["action"])
+
+            # Prefer multi-channel if available
+            if "mc_grid" in entry and "mc_next_grid" in entry:
+                mc_grid = entry["mc_grid"]
+                mc_next = entry["mc_next_grid"]
+                if isinstance(mc_grid, list) and isinstance(mc_next, list):
+                    # Shape: (C, H, W) — pad to target dims
+                    C = len(mc_grid)
+                    state_padded = torch.zeros(C, target_h, target_w, dtype=torch.long)
+                    next_padded = torch.zeros(C, target_h, target_w, dtype=torch.long)
+                    for c in range(C):
+                        ch = mc_grid[c]
+                        for r in range(min(len(ch), target_h)):
+                            for col in range(min(len(ch[0]) if ch else 0, target_w)):
+                                state_padded[c, r, col] = int(ch[r][col])
+                        ch_next = mc_next[c]
+                        for r in range(min(len(ch_next), target_h)):
+                            for col in range(min(len(ch_next[0]) if ch_next else 0, target_w)):
+                                next_padded[c, r, col] = int(ch_next[r][col])
+                    transitions.append((state_padded, action, next_padded))
+                    continue
+
+            # Fallback to single-channel
             grid = entry["grid"]
             next_grid = entry["next_grid"]
-            action = int(entry["action"])
 
             if not isinstance(grid, list) or not isinstance(next_grid, list):
                 continue
@@ -268,7 +291,23 @@ class ARCRecordingDataset(Dataset):
 
     def __getitem__(self, idx: int) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         state, action, next_state = self.transitions[idx]
+        # Normalize to multi-channel (4, H, W) if single-channel (H, W)
+        if state.ndim == 2:
+            state = self._to_multichannel(state)
+        if next_state.ndim == 2:
+            next_state = self._to_multichannel(next_state)
         return state, torch.tensor(action, dtype=torch.long), next_state
+
+    @staticmethod
+    def _to_multichannel(grid: torch.Tensor) -> torch.Tensor:
+        """Convert single-channel (H, W) grid to 4-channel (C, H, W)."""
+        H, W = grid.shape
+        out = torch.zeros(4, H, W, dtype=torch.long)
+        out[0] = (grid == 1).long()   # wall
+        out[1] = torch.zeros(H, W, dtype=torch.long)  # interactive (unknown in single-channel)
+        out[2] = ((grid == 2) | (grid == 3)).long()  # agent + goal
+        out[3] = (grid == 0).long()   # floor
+        return out
 
 
 def create_contrastive_pairs(

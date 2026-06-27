@@ -6,30 +6,55 @@ import torch.nn.functional as F
 
 
 class GridEncoder(nn.Module):
-    def __init__(self, num_symbols: int, latent_dim: int) -> None:
+    def __init__(self, num_symbols: int, latent_dim: int, in_channels: int = 1) -> None:
         super().__init__()
-        self.embedding = nn.Embedding(num_symbols, latent_dim)
-        self.net = nn.Sequential(
-            nn.Conv2d(latent_dim, latent_dim, 3, padding=1),
-            nn.GELU(),
-            nn.Conv2d(latent_dim, latent_dim, 3, padding=1),
-            nn.GELU(),
-            nn.AdaptiveAvgPool2d((1, 1)),
-            nn.Flatten(),
-            nn.Linear(latent_dim, latent_dim),
-        )
+        self.in_channels = in_channels
+        if in_channels == 1:
+            self.embedding = nn.Embedding(num_symbols, latent_dim)
+            self.net = nn.Sequential(
+                nn.Conv2d(latent_dim, latent_dim, 3, padding=1),
+                nn.GELU(),
+                nn.Conv2d(latent_dim, latent_dim, 3, padding=1),
+                nn.GELU(),
+                nn.AdaptiveAvgPool2d((1, 1)),
+                nn.Flatten(),
+                nn.Linear(latent_dim, latent_dim),
+            )
+        else:
+            self.embedding = None
+            self.net = nn.Sequential(
+                nn.Conv2d(in_channels, latent_dim, 3, padding=1),
+                nn.GELU(),
+                nn.Conv2d(latent_dim, latent_dim, 3, padding=1),
+                nn.GELU(),
+                nn.AdaptiveAvgPool2d((1, 1)),
+                nn.Flatten(),
+                nn.Linear(latent_dim, latent_dim),
+            )
 
     def forward(self, grids: torch.Tensor) -> torch.Tensor:
-        x = self.embedding(grids.long()).permute(0, 3, 1, 2).contiguous()
+        if self.in_channels == 1:
+            if grids.ndim == 2:
+                grids = grids.unsqueeze(0).unsqueeze(0)
+            elif grids.ndim == 3:
+                grids = grids.unsqueeze(1)
+            # grids is now (B, 1, H, W)
+            x = self.embedding(grids.long()).squeeze(1).permute(0, 3, 1, 2).contiguous()
+        else:
+            if grids.ndim == 3:
+                grids = grids.unsqueeze(0)
+            # grids is (B, C, H, W)
+            x = grids.float()
         return F.normalize(self.net(x), dim=-1)
 
 
 class JEPAWorldModel(nn.Module):
     """Joint embedding predictive world model with scalar energy scoring."""
 
-    def __init__(self, num_symbols: int = 16, num_actions: int = 8, latent_dim: int = 64) -> None:
+    def __init__(self, num_symbols: int = 16, num_actions: int = 8, latent_dim: int = 64, in_channels: int = 1) -> None:
         super().__init__()
-        self.encoder = GridEncoder(num_symbols, latent_dim)
+        self.in_channels = in_channels
+        self.encoder = GridEncoder(num_symbols, latent_dim, in_channels=in_channels)
         self.action_embedding = nn.Embedding(num_actions, latent_dim)
         self.predictor = nn.Sequential(
             nn.Linear(latent_dim * 2, latent_dim),
@@ -43,7 +68,36 @@ class JEPAWorldModel(nn.Module):
             nn.Softplus(),
         )
 
+    def _to_multichannel(self, grids: torch.Tensor) -> torch.Tensor:
+        """Ensure grids have self.in_channels channels. Always treat 3D input as (B, H, W)."""
+        if self.in_channels == 1:
+            if grids.ndim == 2:
+                return grids.unsqueeze(0)
+            if grids.ndim == 3:
+                return grids.unsqueeze(1) if grids.shape[0] != 1 else grids.unsqueeze(0)
+            return grids
+        # in_channels > 1: ensure (B, C, H, W)
+        if grids.ndim == 2:
+            grids = grids.unsqueeze(0).unsqueeze(1)
+        elif grids.ndim == 3:
+            grids = grids.unsqueeze(1)  # (B, H, W) → (B, 1, H, W)
+        # grids is now (B, C, H, W)
+        if grids.shape[1] == self.in_channels:
+            return grids
+        # Single-channel → multi-channel conversion
+        if grids.shape[1] == 1:
+            B, _, H, W = grids.shape
+            g = grids.squeeze(1)
+            out = torch.zeros(B, self.in_channels, H, W, dtype=torch.float32, device=grids.device)
+            out[:, 0] = (g == 1).float()
+            out[:, 1] = ((g >= 6) & (g <= 11)).float()
+            out[:, 2] = (g == 2).float()
+            out[:, 3] = ((g == 0) | (g == 3)).float()
+            return out
+        return grids
+
     def encode(self, grids: torch.Tensor) -> torch.Tensor:
+        grids = self._to_multichannel(grids)
         if grids.ndim == 2:
             grids = grids.unsqueeze(0)
         return self.encoder(grids)

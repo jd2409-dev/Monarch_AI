@@ -47,6 +47,18 @@ class SearchNode:
 
 
 def extract_agent_pos(state: torch.Tensor, agent_value: int = 2) -> tuple[int, int]:
+    if state.ndim == 3 and state.shape[0] >= 3:
+        agent_ch = state[2]
+        idx = (agent_ch > 0).nonzero(as_tuple=False)
+        if idx.numel() > 0:
+            return (idx[0, 0].item(), idx[0, 1].item())
+    if state.ndim == 3 and state.shape[0] == 1:
+        state = state[0]
+    if state.ndim == 2:
+        idx = (state == agent_value).nonzero(as_tuple=False)
+        if idx.numel() == 0:
+            return (0, 0)
+        return (idx[0, 0].item(), idx[0, 1].item())
     flat = state.detach().cpu().flatten()
     idx = (flat == agent_value).nonzero(as_tuple=False)
     if idx.numel() == 0:
@@ -190,7 +202,7 @@ class MythosSearch:
         next_states, physics_energy = self.simulator.step_batch(batch_states, batch_actions)
         latent_energy = self.world_model.energy(batch_states, batch_actions, next_states)
         goal_energy = self.simulator.distance_to_goal_energy(next_states)
-        combined = physics_energy + latent_energy + goal_energy
+        combined = physics_energy + 0.1 * latent_energy + 10.0 * goal_energy
         for idx, action in enumerate(untried):
             candidate = next_states[idx : idx + 1]
             pos = extract_agent_pos(candidate)

@@ -1,9 +1,14 @@
-"""Procedural grid physics data generator.
+"""Procedural grid physics data generator with ARC-style objects.
 
 Generates large-scale synthetic (state, action, next_state) transitions
 by running random action sequences on the TensorGridSimulator with
-randomized grid configurations. This teaches JEPA core physics:
-movement, wall collision, boundary containment — independent of any level.
+randomized grid configurations. Teaches JEPA core physics plus
+interactive object semantics:
+
+  - Movement, wall collision, boundary containment
+  - Switch activation toggling doors (pair A and pair B)
+  - Door blocking when closed, passability when open
+  - Teleporter pair teleportation
 
 Usage:
     python -m soma_mythos_ehra.training.generate_synthetic \\
@@ -21,15 +26,22 @@ import uuid
 import torch
 
 from soma_mythos_ehra.soma.gpu_simulator import SimulatorConfig, TensorGridSimulator
+from soma_mythos_ehra.types import CellType
 
 
 def generate_grid(
     h: int,
     w: int,
     wall_density: float,
+    include_objects: bool,
     device: torch.device,
 ) -> tuple[torch.Tensor, tuple[int, int], tuple[int, int]]:
-    """Generate a random grid with walls, agent, and goal.
+    """Generate a random grid with walls, agent, goal, and optional ARC objects.
+
+    When *include_objects* is True the grid may contain:
+      - Switch A (4) / Door A closed (6) pairs
+      - Switch B (5) / Door B closed (8) pairs
+      - Teleporter Blue (10) / Teleporter Red (11) pairs
 
     Returns:
         grid: (H, W) tensor
@@ -40,28 +52,88 @@ def generate_grid(
 
     # Place walls randomly
     wall_mask = torch.rand(h, w, device=device) < wall_density
-    grid[wall_mask] = 1
+    grid[wall_mask] = int(CellType.WALL)
 
     # Place agent at random empty cell
-    empty_cells = torch.nonzero(grid == 0, as_tuple=False)
+    empty_cells = torch.nonzero(grid == int(CellType.EMPTY), as_tuple=False)
     if len(empty_cells) == 0:
-        grid[h // 2, w // 2] = 0
-        empty_cells = torch.nonzero(grid == 0, as_tuple=False)
+        grid[h // 2, w // 2] = int(CellType.EMPTY)
+        empty_cells = torch.nonzero(grid == int(CellType.EMPTY), as_tuple=False)
 
     agent_idx = torch.randint(0, len(empty_cells), (1,)).item()
     agent_pos = tuple(empty_cells[agent_idx].tolist())
-    grid[agent_pos[0], agent_pos[1]] = 2
+    grid[agent_pos[0], agent_pos[1]] = int(CellType.AGENT)
 
     # Place goal at random empty cell (not agent position)
-    empty_cells = torch.nonzero(grid == 0, as_tuple=False)
+    empty_cells = torch.nonzero(grid == int(CellType.EMPTY), as_tuple=False)
     if len(empty_cells) > 0:
         goal_idx = torch.randint(0, len(empty_cells), (1,)).item()
         goal_pos = tuple(empty_cells[goal_idx].tolist())
-        grid[goal_pos[0], goal_pos[1]] = 3
+        grid[goal_pos[0], goal_pos[1]] = int(CellType.GOAL)
     else:
         goal_pos = agent_pos
 
+    if not include_objects:
+        return grid, agent_pos, goal_pos
+
+    # --- Place interactive objects ---
+    # Reserve space: we need at least 3 empty cells for a meaningful pair
+    empty_cells = torch.nonzero(grid == int(CellType.EMPTY), as_tuple=False)
+    if len(empty_cells) < 6:
+        return grid, agent_pos, goal_pos
+
+    # Teleporter pair (Blue -> Red)
+    perm = torch.randperm(len(empty_cells))
+    t1_idx, t2_idx = int(perm[0].item()), int(perm[1].item())
+    t1 = tuple(empty_cells[t1_idx].tolist())
+    t2 = tuple(empty_cells[t2_idx].tolist())
+    grid[t1[0], t1[1]] = int(CellType.TELEPORTER_BLUE)
+    grid[t2[0], t2[1]] = int(CellType.TELEPORTER_RED)
+
+    # Switch A + Door A pair
+    empty_cells = torch.nonzero(grid == int(CellType.EMPTY), as_tuple=False)
+    if len(empty_cells) >= 4:
+        perm = torch.randperm(len(empty_cells))
+        s_idx, d_idx = int(perm[0].item()), int(perm[1].item())
+        s_pos = tuple(empty_cells[s_idx].tolist())
+        d_pos = tuple(empty_cells[d_idx].tolist())
+        grid[s_pos[0], s_pos[1]] = int(CellType.SWITCH_A)
+        grid[d_pos[0], d_pos[1]] = int(CellType.DOOR_A_CLOSED)
+
+        # Switch B + Door B pair (if room)
+        empty_cells = torch.nonzero(grid == int(CellType.EMPTY), as_tuple=False)
+        if len(empty_cells) >= 4:
+            perm = torch.randperm(len(empty_cells))
+            s2_idx, d2_idx = int(perm[0].item()), int(perm[1].item())
+            s2_pos = tuple(empty_cells[s2_idx].tolist())
+            d2_pos = tuple(empty_cells[d2_idx].tolist())
+            grid[s2_pos[0], s2_pos[1]] = int(CellType.SWITCH_B)
+            grid[d2_pos[0], d2_pos[1]] = int(CellType.DOOR_B_CLOSED)
+
     return grid, agent_pos, goal_pos
+
+
+def grid_to_multichannel(grid: torch.Tensor) -> torch.Tensor:
+    """Convert a single-channel grid to 4-channel multi-channel representation.
+
+    Channel 0: Walls (value 1)
+    Channel 1: Interactive (switches, doors, teleporters)
+    Channel 2: Dynamic (agent=2, goal=3)
+    Channel 3: Floor (empty=0)
+    """
+    H, W = grid.shape[-2], grid.shape[-1]
+    out = torch.zeros(4, H, W, dtype=torch.long, device=grid.device)
+    out[0] = (grid == int(CellType.WALL)).long()
+    interactive = torch.zeros(H, W, dtype=torch.long, device=grid.device)
+    for v in (int(CellType.SWITCH_A), int(CellType.SWITCH_B),
+              int(CellType.DOOR_A_CLOSED), int(CellType.DOOR_A_OPEN),
+              int(CellType.DOOR_B_CLOSED), int(CellType.DOOR_B_OPEN),
+              int(CellType.TELEPORTER_BLUE), int(CellType.TELEPORTER_RED)):
+        interactive = interactive | (grid == v)
+    out[1] = interactive.long()
+    out[2] = ((grid == int(CellType.AGENT)) | (grid == int(CellType.GOAL))).long()
+    out[3] = (grid == int(CellType.EMPTY)).long()
+    return out
 
 
 def generate_sequence(
@@ -74,7 +146,7 @@ def generate_sequence(
 
     Returns list of {"grid": list, "action": int, "next_grid": list}
     """
-    config = SimulatorConfig(wall_value=1, agent_value=2, goal_value=3, empty_value=0)
+    config = SimulatorConfig()
     sim = TensorGridSimulator(grid, config=config, device=device)
 
     transitions = []
@@ -82,7 +154,8 @@ def generate_sequence(
     current_pos = agent_pos
 
     for _ in range(steps):
-        action = torch.randint(1, 5, (1,)).item()  # 1=UP, 2=DOWN, 3=LEFT, 4=RIGHT
+        # Mix directional moves (1-4) with USE action (5)
+        action = torch.randint(1, 6, (1,)).item()
 
         state_before = current_grid.clone()
         next_grid, energy = sim.step_batch(
@@ -97,12 +170,13 @@ def generate_sequence(
             current_grid = next_grid
             current_pos = next_pos
         # If no movement (wall/boundary), still record the transition
-        # The "next_grid" is the same as current_grid — teaches collision physics
 
         transitions.append({
             "grid": state_before.cpu().tolist(),
             "action": int(action),
             "next_grid": current_grid.cpu().tolist(),
+            "mc_grid": grid_to_multichannel(state_before).cpu().tolist(),
+            "mc_next_grid": grid_to_multichannel(current_grid).cpu().tolist(),
             "energy": float(energy[0].item()),
         })
 
@@ -111,7 +185,7 @@ def generate_sequence(
 
 def _find_agent(grid: torch.Tensor) -> tuple[int, int] | None:
     """Find agent position (value 2) in grid."""
-    positions = (grid == 2).nonzero(as_tuple=False)
+    positions = (grid == int(CellType.AGENT)).nonzero(as_tuple=False)
     if len(positions) == 0:
         return None
     return tuple(positions[0].tolist())
@@ -124,6 +198,7 @@ def generate_bulk(
     min_size: int,
     max_size: int,
     wall_density_range: tuple[float, float],
+    object_ratio: float,
 ) -> None:
     """Generate bulk synthetic physics data on GPU."""
     os.makedirs(output_dir, exist_ok=True)
@@ -137,8 +212,9 @@ def generate_bulk(
         h = torch.randint(min_size, max_size + 1, (1,)).item()
         w = torch.randint(min_size, max_size + 1, (1,)).item()
         wall_density = torch.empty(1).uniform_(*wall_density_range).item()
+        include_objects = torch.rand(1).item() < object_ratio
 
-        grid, agent_pos, goal_pos = generate_grid(h, w, wall_density, device)
+        grid, agent_pos, goal_pos = generate_grid(h, w, wall_density, include_objects, device)
         transitions = generate_sequence(grid, agent_pos, steps_per_seq, device)
         all_transitions.extend(transitions)
         total_transitions += len(transitions)
@@ -155,6 +231,7 @@ def generate_bulk(
     print(f"Done: {total_transitions} transitions written to {output_path}")
     print(f"Grid sizes: {min_size}x{min_size} to {max_size}x{max_size}")
     print(f"Wall density: {wall_density_range[0]:.1f}-{wall_density_range[1]:.1f}")
+    print(f"Object ratio: {object_ratio:.0%}")
 
 
 def main() -> None:
@@ -166,6 +243,7 @@ def main() -> None:
     parser.add_argument("--max-size", type=int, default=64, help="Maximum grid dimension")
     parser.add_argument("--wall-density-min", type=float, default=0.05, help="Minimum wall density")
     parser.add_argument("--wall-density-max", type=float, default=0.3, help="Maximum wall density")
+    parser.add_argument("--object-ratio", type=float, default=0.5, help="Fraction of grids with interactive objects")
     args = parser.parse_args()
 
     generate_bulk(
@@ -175,6 +253,7 @@ def main() -> None:
         min_size=args.min_size,
         max_size=args.max_size,
         wall_density_range=(args.wall_density_min, args.wall_density_max),
+        object_ratio=args.object_ratio,
     )
 
 

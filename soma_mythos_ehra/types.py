@@ -26,6 +26,26 @@ DIRECTION_DELTAS: dict[Action, tuple[int, int]] = {
 }
 
 
+class CellType(IntEnum):
+    """Semantic grid cell identifiers for ARC-style object mechanics."""
+
+    EMPTY = 0
+    WALL = 1
+    AGENT = 2
+    GOAL = 3
+    SWITCH_A = 4
+    SWITCH_B = 5
+    DOOR_A_CLOSED = 6
+    DOOR_A_OPEN = 7
+    DOOR_B_CLOSED = 8
+    DOOR_B_OPEN = 9
+    TELEPORTER_BLUE = 10
+    TELEPORTER_RED = 11
+    BOX = 12
+    TARGET = 13
+    BOX_ON_TARGET = 14
+
+
 @dataclass(frozen=True)
 class GridState:
     grid: torch.Tensor

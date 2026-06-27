@@ -21,6 +21,7 @@ class MonarchConfig:
     num_symbols: int = 17
     num_actions: int = 8
     latent_dim: int = 64
+    in_channels: int = 4
     exploration: float = 3.5
     cycle_penalty: float = 15.0
     tabu_window: int = 8
@@ -42,6 +43,7 @@ class MonarchAI:
             num_symbols=self.config.num_symbols,
             num_actions=self.config.num_actions,
             latent_dim=self.config.latent_dim,
+            in_channels=self.config.in_channels,
         )
         if self.config.model_path is not None:
             path = Path(self.config.model_path)
