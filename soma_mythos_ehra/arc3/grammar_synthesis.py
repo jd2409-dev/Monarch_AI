@@ -30,6 +30,7 @@ class SynthesisConfig:
     beam_width: int = 20
     max_depth: int = 6
     timeout: float = 10.0
+    use_encoder_scoring: bool = True
 
 
 @dataclass
@@ -53,6 +54,18 @@ class GrammarSynthesizer:
             self.has_predictor = True
         except Exception:
             pass
+
+        # Load CNN encoder for output scoring
+        self.encoder = None
+        if self.config.use_encoder_scoring:
+            try:
+                from soma_mythos_ehra.arc3.jepa_encoder import JEPAHybridModel
+                from soma_mythos_ehra.arc3.expanded_grammar import EXTENDED_NUM_TOKENS
+                self.encoder = JEPAHybridModel(vocab_size=EXTENDED_NUM_TOKENS, latent_dim=512, d_model=256)
+                self.encoder.load_state_dict(torch.load("checkpoints/hybrid_jepa_model.pt", weights_only=True))
+                self.encoder.eval()
+            except Exception:
+                self.encoder = None
 
     def synthesize(self, task: ARC3Task) -> ASTNode | None:
         train_inputs = task.get_train_inputs()
@@ -294,12 +307,34 @@ class GrammarSynthesizer:
         if state.ast is None:
             return
         correct = 0
+        partial_score = 0.0
         for inp, tgt in zip(inputs, targets):
             pred = self.executor.execute(state.ast, inp)
             if pred is not None and torch.equal(pred, tgt):
                 correct += 1
+                partial_score += 10.0
+            elif pred is not None and self.encoder is not None:
+                # Encoder-based partial scoring
+                try:
+                    max_h = max(pred.shape[0], tgt.shape[0])
+                    max_w = max(pred.shape[1], tgt.shape[1])
+                    pad_pred = torch.nn.functional.pad(pred, (0, max_w - pred.shape[1], 0, max_h - pred.shape[0]), value=0)
+                    pad_tgt = torch.nn.functional.pad(tgt, (0, max_w - tgt.shape[1], 0, max_h - tgt.shape[0]), value=0)
+                    inp_pad = torch.nn.functional.pad(inp, (0, max_w - inp.shape[1], 0, max_h - inp.shape[0]), value=0)
+                    pred_pair = torch.stack([inp_pad.float(), pad_pred.float()]).unsqueeze(0)
+                    tgt_pair = torch.stack([inp_pad.float(), pad_tgt.float()]).unsqueeze(0)
+                    with torch.no_grad():
+                        emb_pred = self.encoder.encoder(pred_pair)
+                        emb_tgt = self.encoder.encoder(tgt_pair)
+                        sim = torch.cosine_similarity(emb_pred, emb_tgt).item()
+                        partial_score += max(0, sim) * 3.0
+                except Exception:
+                    pass
+            elif pred is not None and pred.shape == tgt.shape:
+                # Shape match partial credit
+                partial_score += 0.5
         state.correct_pairs = correct
-        state.score += correct * 10.0
+        state.score += partial_score
 
     def _make_primitive(self, token: str) -> ASTNode:
         prim_name, params = PRIMITIVE_MAP[token]

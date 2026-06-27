@@ -148,11 +148,11 @@ class ASTExecutor:
         return grid
 
     def _eval_compose(self, node: ASTNode, grid: torch.Tensor) -> torch.Tensor:
-        """Execute compose: apply left then right."""
-        if len(node.children) >= 2:
-            mid = self._eval(node.children[0], grid)
-            return self._eval(node.children[1], mid)
-        return grid
+        """Execute compose: apply children sequentially left to right."""
+        result = grid
+        for child in node.children:
+            result = self._eval(child, result)
+        return result
 
     def _eval_apply_to_objects(self, node: ASTNode, grid: torch.Tensor) -> torch.Tensor:
         """Execute apply_to_objects: filter objects, then apply action to each."""
