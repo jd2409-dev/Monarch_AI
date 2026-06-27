@@ -13,10 +13,8 @@ from dataclasses import dataclass, field
 import torch
 
 from soma_mythos_ehra.arc3.adapter import ARC3Task
-from soma_mythos_ehra.arc3.dataset_generator import extract_structural_features
 from soma_mythos_ehra.arc3.dsl_grammar import DSLNode, PRIMITIVES
 from soma_mythos_ehra.arc3.dsl_kernel import DSLKernel
-from soma_mythos_ehra.arc3.jepa_predictor import JEPAStructureRouter
 from soma_mythos_ehra.arc3.spatial_classifier import SpatialDiffClassifier
 from soma_mythos_ehra.arc3.template_library import build_template_library
 
@@ -48,14 +46,6 @@ class GuidedBeamSynthesizer:
         self.kernel = DSLKernel(background=0)
         self.templates = build_template_library()
 
-        # Try to load trained predictor
-        self.predictor = JEPAStructureRouter(num_templates=len(self.templates))
-        try:
-            self.predictor.load("checkpoints/jepa_structure_predictor.pt")
-            self.has_predictor = True
-        except Exception:
-            self.has_predictor = False
-
     def synthesize(self, task: ARC3Task) -> DSLNode | None:
         """Search for a DSL program that solves the task."""
         train_inputs = task.get_train_inputs()
@@ -65,34 +55,23 @@ class GuidedBeamSynthesizer:
 
         start_time = time.time()
 
-        # Step 1: Get template probabilities from trained predictor
-        if self.has_predictor and train_inputs:
-            features = extract_structural_features(train_inputs[0], train_outputs[0])
-            with torch.no_grad():
-                template_probs = self.predictor.predict(features.unsqueeze(0)).squeeze(0)
-        else:
-            template_probs = torch.ones(len(self.templates)) / len(self.templates)
-
-        # Step 2: Sort templates by predicted probability
-        sorted_indices = torch.argsort(template_probs, descending=True)
-
-        # Step 3: Try templates in predicted order
-        for idx in sorted_indices:
+        # Step 1: Try template library first (fast path)
+        for name, prog in self.templates:
             if time.time() - start_time > self.config.timeout:
                 break
-            i = idx.item()
-            if i < len(self.templates):
-                name, prog = self.templates[i]
-                correct, _ = self.kernel.execute_on_pairs(prog, train_inputs, train_outputs)
-                if correct == len(train_inputs):
-                    return prog
+            correct, _ = self.kernel.execute_on_pairs(prog, train_inputs, train_outputs)
+            if correct == len(train_inputs):
+                return prog
 
-        # Step 4: Fallback to beam search with primitives
+        # Step 2: Get primitive probabilities from classifier
         primitive_probs = self.classifier.predict_batch(train_inputs, train_outputs)
+
+        # Step 3: Get top-K primitive indices
         top_k = min(self.config.top_k_primitives, len(PRIMITIVES))
         top_indices = torch.argsort(primitive_probs, descending=True)[:top_k]
         top_names = [list(PRIMITIVES.keys())[i] for i in top_indices if i < len(PRIMITIVES)]
 
+        # Step 4: Generate initial candidates (single primitives)
         beam = []
         for name in top_names:
             prim = PRIMITIVES.get(name)
@@ -106,32 +85,41 @@ class GuidedBeamSynthesizer:
             if correct == len(train_inputs):
                 return prog
 
-        # Beam search
+        # Step 5: Beam search with depth expansion
         for depth in range(1, self.config.max_depth):
             if time.time() - start_time > self.config.timeout:
                 break
+
             candidates = []
             for cand in beam:
                 if time.time() - start_time > self.config.timeout:
                     break
+
                 for name in top_names:
                     if time.time() - start_time > self.config.timeout:
                         break
+
                     prim = PRIMITIVES.get(name)
                     if prim is None:
                         continue
+
                     new_prog = self._extend_program(cand.program, name)
                     if new_prog is None:
                         continue
+
                     correct, _ = self.kernel.execute_on_pairs(new_prog, train_inputs, train_outputs)
+
                     if correct <= cand.correct_pairs:
                         continue
+
                     prim_idx = list(PRIMITIVES.keys()).index(name) if name in PRIMITIVES else 0
                     score = correct + float(primitive_probs[prim_idx]) * 0.5
                     candidate = BeamCandidate(program=new_prog, score=score, correct_pairs=correct)
                     candidates.append(candidate)
+
                     if correct == len(train_inputs):
                         return new_prog
+
             candidates.sort(key=lambda c: c.score, reverse=True)
             beam = candidates[:self.config.beam_width]
 
