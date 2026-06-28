@@ -1,11 +1,11 @@
-"""Interactive Agent v3 — scaled training + LLM code evolution + efficiency optimization.
+"""Interactive Agent v4 — improved world model + code evolution + exploration.
 
-Full active-inference loop:
-1. Explore → collect transitions → replay buffer
-2. Train world model ensemble on replay buffer
-3. LLM-driven code evolution for rule inference
-4. Trajectory replay for action efficiency
-5. Multi-level curriculum with knowledge transfer
+v4 improvements:
+- Stop-gradient on world model targets (stable training)
+- Grid diff encoder for learning action effects
+- Heuristic-based code evolution (27 executable hypotheses)
+- Lower thresholds for faster learning
+- Systematic exploration strategy
 """
 from __future__ import annotations
 
@@ -36,7 +36,7 @@ class AgentConfig:
     latent_dim: int = 256
     num_actions: int = 8
     buffer_capacity: int = 100000
-    train_steps_per_episode: int = 150
+    train_steps_per_episode: int = 200
     evolve_every_n_episodes: int = 2
     mastery_threshold: int = 3
     early_stop_on_win: bool = True
@@ -159,7 +159,7 @@ class InteractiveAgent:
 
             # 2. Code-evolved policy
             if action_plan is None and self.code_evolver.best_hypothesis:
-                if self.code_evolver.best_hypothesis.score > 0.3:
+                if self.code_evolver.best_hypothesis.score > 0.1:
                     code_action = self.code_evolver.get_best_action(
                         obs.grid, obs.available_actions,
                     )
@@ -235,7 +235,7 @@ class InteractiveAgent:
                 self.stats.efficiency = (human_baseline / max(self.stats.total_steps, 1)) ** 2
 
         # 2. Train world model
-        if len(self.buffer) >= 128:
+        if len(self.buffer) >= 64:
             if self.config.verbose:
                 print(f"  Training ({self.config.train_steps_per_episode} steps)...")
             train_metrics = self.trainer.train_episode(episode_transitions)

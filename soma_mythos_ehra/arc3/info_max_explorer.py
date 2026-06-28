@@ -161,7 +161,7 @@ class InfoMaxExplorer:
             if 0 <= y < grid.shape[0] and 0 <= x < grid.shape[1]:
                 # Score based on local variation
                 patch = grid[max(0,y-1):y+2, max(0,x-1):x+2]
-                score = float(patch.std())
+                score = float(patch.float().std())
                 # Bonus for boundary cells
                 if y > 0 and y < grid.shape[0]-1:
                     if grid[y-1, x] != grid[y+1, x]:

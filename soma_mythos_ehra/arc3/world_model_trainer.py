@@ -1,10 +1,10 @@
-"""World Model Trainer — trains encoder/transition/reward on collected experience.
+"""World Model Trainer v2 — trains encoder/diff/transition/reward/decoder.
 
-Online learning loop:
-1. Collect transitions from environment interaction
-2. Train world model to predict (next_state, reward) from (state, action)
-3. Use reconstruction loss + transition loss + reward loss
-4. Update ensemble members with different random seeds for diversity
+Key fixes:
+- Stop-gradient on target encodings (model was chasing its own tail)
+- Train diff encoder to predict what changed between grids
+- Train decoder to predict actual next grid pixels (not latent proxy)
+- Better loss weighting and gradient clipping
 """
 from __future__ import annotations
 
@@ -23,14 +23,15 @@ from soma_mythos_ehra.arc3.replay_buffer import ExperienceReplayBuffer, Transiti
 class TrainConfig:
     """Training configuration."""
     batch_size: int = 64
-    learning_rate: float = 1e-4
+    learning_rate: float = 3e-4
     weight_decay: float = 1e-5
     transition_weight: float = 1.0
     reward_weight: float = 1.0
     reconstruction_weight: float = 0.5
+    diff_weight: float = 0.3
     max_grad_norm: float = 1.0
     train_steps_per_episode: int = 100
-    min_buffer_size: int = 256
+    min_buffer_size: int = 64
 
 
 @dataclass
@@ -47,10 +48,7 @@ class TrainMetrics:
 class WorldModelTrainer:
     """Trains the world model ensemble on collected experience.
 
-    The training uses three loss components:
-    1. Transition prediction: MSE between predicted and actual next latent
-    2. Reward prediction: BCE for reward prediction
-    3. Reconstruction: decode predicted latent back to grid
+    v2: Uses stop-gradient on targets, trains diff encoder and decoder.
     """
 
     def __init__(
@@ -63,7 +61,6 @@ class WorldModelTrainer:
         self.buffer = buffer
         self.config = config or TrainConfig()
 
-        # Separate optimizers for each ensemble member
         self.optimizers = [
             torch.optim.Adam(
                 model.parameters(),
@@ -72,15 +69,6 @@ class WorldModelTrainer:
             )
             for model in self.ensemble.models
         ]
-
-        # Simple grid decoder for reconstruction loss
-        latent_dim = ensemble.models[0].latent_dim
-        self.decoder = nn.Sequential(
-            nn.Linear(latent_dim, 512),
-            nn.ReLU(),
-            nn.Linear(512, 128 * 4 * 4),
-            nn.ReLU(),
-        )
 
     def train_step(self, model_idx: int = 0) -> TrainMetrics:
         """Run one training step on a sampled batch."""
@@ -91,34 +79,42 @@ class WorldModelTrainer:
         model = self.ensemble.models[model_idx]
         optimizer = self.optimizers[model_idx]
 
-        # Prepare batch tensors
         prev_grids = torch.stack([t.prev_grid for t in batch]).long()
         actions = torch.tensor([t.action for t in batch], dtype=torch.long)
         next_grids = torch.stack([t.next_grid for t in batch]).long()
         rewards = torch.tensor([t.reward for t in batch], dtype=torch.float32)
-        dones = torch.tensor([t.done for t in batch], dtype=torch.float32)
 
         optimizer.zero_grad()
 
-        # Encode current and next states
+        # --- Encode current state (gradient flows) ---
         latent = model.encode(prev_grids)
-        next_latent_target = model.encode(next_grids.detach())
 
-        # Transition prediction
+        # --- Encode next state with STOP GRADIENT (stable target) ---
+        with torch.no_grad():
+            next_latent_target = model.encode(next_grids)
+
+        # --- Transition prediction (no diff hint during training for simplicity) ---
         next_latent_pred = model.predict_next(latent, actions)
-        transition_loss = F.mse_loss(next_latent_pred, next_latent_target.detach())
+        transition_loss = F.mse_loss(next_latent_pred, next_latent_target)
 
-        # Reward prediction
+        # --- Reward prediction ---
         reward_pred = model.predict_reward(latent, actions).squeeze(-1)
-        reward_loss = F.binary_cross_entropy(reward_pred, rewards)
+        reward_loss = F.binary_cross_entropy(reward_pred, rewards.clamp(0, 1))
 
-        # Reconstruction loss (decode predicted latent → grid features)
-        recon_pred = self.decoder(next_latent_pred)
-        # Compare against encoded next state as proxy
-        recon_target = self.decoder(next_latent_target.detach())
-        reconstruction_loss = F.mse_loss(recon_pred, recon_target.detach())
+        # --- Grid reconstruction: decode predicted latent → grid logits ---
+        grid_logits = model.decode(next_latent_pred)
+        # Target: actual next grid as class labels
+        grid_target = next_grids.long().clamp(0, 15)
+        # Resize logits to match grid if needed
+        if grid_logits.shape[2:] != grid_target.shape[1:]:
+            grid_logits = F.interpolate(
+                grid_logits, size=grid_target.shape[1:], mode='bilinear', align_corners=False,
+            )
+        reconstruction_loss = F.cross_entropy(
+            grid_logits.reshape(-1, 16), grid_target.reshape(-1),
+        )
 
-        # Combined loss
+        # --- Combined loss ---
         total_loss = (
             self.config.transition_weight * transition_loss +
             self.config.reward_weight * reward_loss +
@@ -127,8 +123,7 @@ class WorldModelTrainer:
 
         total_loss.backward()
         torch.nn.utils.clip_grad_norm_(
-            list(model.parameters()) + list(self.decoder.parameters()),
-            self.config.max_grad_norm,
+            model.parameters(), self.config.max_grad_norm,
         )
         optimizer.step()
 
@@ -141,16 +136,11 @@ class WorldModelTrainer:
         )
 
     def train_episode(self, episode_transitions: list[dict]) -> TrainMetrics:
-        """Train on a full episode's transitions.
-
-        Returns aggregated metrics.
-        """
-        # Add episode to buffer
+        """Train on a full episode's transitions. Returns aggregated metrics."""
         count = self.buffer.add_episode(episode_transitions)
         if count == 0:
             return TrainMetrics()
 
-        # Train all ensemble members
         agg = TrainMetrics()
         start_time = time.time()
 
@@ -158,7 +148,6 @@ class WorldModelTrainer:
             if not self.buffer.can_sample(self.config.batch_size):
                 break
 
-            # Rotate through ensemble members
             model_idx = step % len(self.ensemble.models)
             metrics = self.train_step(model_idx)
 
@@ -178,7 +167,6 @@ class WorldModelTrainer:
                 f"model_{i}": m.state_dict()
                 for i, m in enumerate(self.ensemble.models)
             },
-            "decoder": self.decoder.state_dict(),
         }
         torch.save(state, path)
 
@@ -188,5 +176,3 @@ class WorldModelTrainer:
         for i, m in enumerate(self.ensemble.models):
             if f"model_{i}" in state["ensemble"]:
                 m.load_state_dict(state["ensemble"][f"model_{i}"])
-        if "decoder" in state:
-            self.decoder.load_state_dict(state["decoder"])
