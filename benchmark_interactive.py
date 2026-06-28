@@ -1,7 +1,9 @@
-"""Benchmark for ARC-AGI-3 Interactive Agent.
+"""Benchmark for ARC-AGI-3 Interactive Agent v2.
 
-Evaluates the agent on available ARC-AGI-3 environments and computes
-RHAE (Relative Human Action Efficiency) scores.
+Runs the full active-inference loop with online learning:
+- Experience replay + world model training
+- Code evolution for rule inference
+- Multi-level curriculum progression
 """
 from __future__ import annotations
 
@@ -15,29 +17,35 @@ from soma_mythos_ehra.arc3.interactive_agent import InteractiveAgent, AgentConfi
 
 
 def compute_rhae(agent_actions: int, human_baseline: int) -> float:
-    """Compute Relative Human Action Efficiency for one level.
-
-    RHAE = (human_baseline / agent_actions) ^ 2
-    Capped at 1.15 (agent can be at most 15% more efficient than human).
-    """
+    """Compute Relative Human Action Efficiency."""
     if agent_actions <= 0:
         return 0.0
     rhae = (human_baseline / agent_actions) ** 2
     return min(rhae, 1.15)
 
 
-def run_benchmark(max_games: int | None = None, verbose: bool = True) -> None:
-    """Run the interactive agent benchmark."""
+def run_benchmark(
+    max_games: int | None = None,
+    episodes_per_game: int = 5,
+    verbose: bool = True,
+) -> None:
+    """Run the interactive agent benchmark with full learning loop."""
     print("=" * 60)
-    print("ARC-AGI-3 Interactive Agent Benchmark")
+    print("ARC-AGI-3 Interactive Agent v2 Benchmark")
+    print("With online learning + code evolution + curriculum")
     print("=" * 60)
 
     config = AgentConfig(
         max_steps=300,
+        max_episodes=episodes_per_game,
         exploration_rate=0.3,
         temperature=1.0,
         ensemble_size=3,
         latent_dim=256,
+        buffer_capacity=50000,
+        train_steps_per_episode=50,
+        evolve_every_n_episodes=3,
+        mastery_threshold=3,
         verbose=verbose,
     )
 
@@ -47,12 +55,11 @@ def run_benchmark(max_games: int | None = None, verbose: bool = True) -> None:
     if max_games:
         games = games[:max_games]
 
-    print(f"\nAvailable games: {len(games)}")
+    print(f"\nGames: {len(games)}")
+    print(f"Episodes per game: {episodes_per_game}")
 
-    results = []
+    all_stats = []
     total_won = 0
-    total_rhae = 0.0
-    total_baseline = 0
 
     for i, game in enumerate(games):
         gid = game["game_id"]
@@ -60,66 +67,57 @@ def run_benchmark(max_games: int | None = None, verbose: bool = True) -> None:
         baselines = game["baseline_actions"]
 
         if verbose:
-            print(f"\n--- [{i+1}/{len(games)}] {title} ({gid}) ---")
+            print(f"\n{'='*60}")
+            print(f"[{i+1}/{len(games)}] {title} ({gid})")
             print(f"  Tags: {game['tags']}")
             print(f"  Human baselines: {baselines}")
 
-        agent.play(gid)
-        stats = agent.stats
+        stats_list = agent.play_game(gid, episodes_per_game)
+        all_stats.extend(stats_list)
 
-        # Compute RHAE per level
-        level_rhae = []
-        for lvl in range(min(stats.levels_completed, len(baselines))):
-            h_base = baselines[lvl]
-            a_actions = stats.total_actions // max(stats.levels_completed, 1)
-            rhae = compute_rhae(a_actions, h_base)
-            level_rhae.append(rhae)
-
-        avg_rhae = sum(level_rhae) / len(level_rhae) if level_rhae else 0.0
-        total_rhae += avg_rhae
-        total_baseline += sum(baselines)
-
-        result = {
-            "game_id": gid,
-            "title": title,
-            "won": stats.won,
-            "levels_completed": stats.levels_completed,
-            "total_actions": stats.total_actions,
-            "rhae": avg_rhae,
-            "time": stats.episode_time,
-        }
-        results.append(result)
-
-        if stats.won:
+        final = stats_list[-1] if stats_list else None
+        if final and final.won:
             total_won += 1
 
-        status = "WON" if stats.won else "LOST"
-        print(f"  {status}: levels={stats.levels_completed}, "
-              f"actions={stats.total_actions}, "
-              f"RHAE={avg_rhae:.2f}, time={stats.episode_time:.1f}s")
+        # RHAE calculation
+        if final:
+            avg_actions = sum(final.actions_taken) / max(len(final.actions_taken), 1)
+            if baselines:
+                avg_baseline = sum(baselines[:max(final.levels_completed, 1)]) / max(final.levels_completed, 1)
+                rhae = compute_rhae(int(avg_actions), int(avg_baseline))
+            else:
+                rhae = 0.0
+
+            status = "WON" if final.won else "LOST"
+            if verbose:
+                print(f"\n  Final: {status} | steps={final.total_steps} | "
+                      f"levels={final.levels_completed} | time={final.episode_time:.1f}s")
+                if final.train_metrics:
+                    last_train = final.train_metrics[-1]
+                    print(f"  Training: loss={last_train.total_loss:.4f}")
+                if final.code_scores:
+                    print(f"  Code evolution: best_score={max(final.code_scores):.2f}")
 
     # Summary
     print(f"\n{'='*60}")
     print(f"BENCHMARK RESULTS")
     print(f"{'='*60}")
-    print(f"Games played: {len(results)}")
-    print(f"Games won: {total_won}/{len(results)} ({100*total_won/len(results):.1f}%)")
-    print(f"Average RHAE: {total_rhae/len(results):.2f}")
+    print(f"Games played: {len(games)}")
+    print(f"Games won: {total_won}/{len(games)} ({100*total_won/len(games):.1f}%)")
+    print(f"Buffer size: {len(agent.buffer)}")
+    print(f"Code hypotheses: {len(agent.code_evolver.population)}")
     print(f"{'='*60}")
-
-    # Detailed results
-    print("\nDetailed Results:")
-    for r in results:
-        status = "WIN" if r["won"] else "LOSE"
-        print(f"  {r['title']:8s} {status:5s} levels={r['levels_completed']} "
-              f"actions={r['total_actions']:3d} RHAE={r['rhae']:.2f} "
-              f"time={r['time']:.1f}s")
 
 
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument("--max-games", type=int, default=None)
+    parser.add_argument("--episodes", type=int, default=5)
     parser.add_argument("--quiet", action="store_true")
     args = parser.parse_args()
-    run_benchmark(max_games=args.max_games, verbose=not args.quiet)
+    run_benchmark(
+        max_games=args.max_games,
+        episodes_per_game=args.episodes,
+        verbose=not args.quiet,
+    )
