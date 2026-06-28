@@ -1,12 +1,9 @@
-"""LLM Code Evolver v2 — real LLM-driven hypothesis generation.
+"""LLM Code Evolver v3 — local domain LLM + OpenAI + template fallback.
 
-Uses OpenAI API (or fallback heuristic) to:
-1. Generate Python code hypotheses from observed transitions
-2. Mutate winning hypotheses via LLM-guided editing
-3. Cross over hypotheses via LLM combination
-4. Score all hypotheses against observations
-
-When no API key is set, falls back to template-based evolution.
+Three-tier hypothesis generation:
+1. Local Domain LLM (fastest, sub-ms, runs on GPU)
+2. OpenAI API (smarter, requires API key, ~1s latency)
+3. Template-based (always available, no dependencies)
 """
 from __future__ import annotations
 
@@ -17,6 +14,7 @@ import time
 from dataclasses import dataclass, field
 
 import numpy as np
+import torch
 
 
 @dataclass
@@ -67,26 +65,43 @@ class LLMCodeEvolver:
         self.observation_buffer: list[dict] = []
         self.best_hypothesis: CodeHypothesis | None = None
         self.llm_client = None
+        self.local_llm = None
         self._init_llm()
 
     def _init_llm(self) -> None:
-        """Initialize OpenAI client if API key available."""
-        if not self.config.use_llm:
-            return
-        api_key = os.environ.get("OPENAI_API_KEY")
-        if api_key:
+        """Initialize LLM backends: local first, then OpenAI."""
+        # Try loading local domain LLM
+        if self.config.use_llm:
             try:
-                import openai
-                self.llm_client = openai.OpenAI(api_key=api_key)
-                print("  LLM: OpenAI client initialized")
+                from soma_mythos_ehra.arc3.local_coder import ARCDomainLLM
+                self.local_llm = ARCDomainLLM.load("checkpoints/local_arc_llm.pt")
+                self.local_llm.eval()
+                device = "cuda" if torch.cuda.is_available() else "cpu"
+                self.local_llm = self.local_llm.to(device)
+                print(f"  LLM: Local domain model loaded ({device})")
             except Exception as e:
-                print(f"  LLM: Failed to init OpenAI: {e}")
-        else:
-            print("  LLM: No API key, using heuristic mode")
+                print(f"  LLM: Local model not available: {e}")
+
+        # Try OpenAI
+        if self.config.use_llm and self.local_llm is None:
+            api_key = os.environ.get("OPENAI_API_KEY")
+            if api_key:
+                try:
+                    import openai
+                    self.llm_client = openai.OpenAI(api_key=api_key)
+                    print("  LLM: OpenAI client initialized")
+                except Exception as e:
+                    print(f"  LLM: Failed to init OpenAI: {e}")
+            else:
+                print("  LLM: No API key, using template mode")
 
     @property
     def has_llm(self) -> bool:
-        return self.llm_client is not None
+        return self.llm_client is not None or self.local_llm is not None
+
+    @property
+    def has_local_llm(self) -> bool:
+        return self.local_llm is not None
 
     def record_observation(
         self, prev_grid: np.ndarray, action: int,
@@ -102,8 +117,10 @@ class LLMCodeEvolver:
             self.observation_buffer = self.observation_buffer[-300:]
 
     def initialize_population(self) -> list[CodeHypothesis]:
-        """Create initial population — LLM-generated if available."""
-        if self.has_llm:
+        """Create initial population — local LLM > OpenAI > template."""
+        if self.has_local_llm:
+            self.population = self._local_llm_generate()
+        elif self.llm_client:
             self.population = self._llm_generate_initial()
         else:
             self.population = self._template_initial()
@@ -116,9 +133,10 @@ class LLMCodeEvolver:
 
         new_pop = self.population[:self.config.elite_count]
 
-        # LLM or template crossover + mutation
         while len(new_pop) < self.config.population_size:
-            if self.has_llm and torch.rand(1).item() < 0.6:
+            if self.has_local_llm:
+                child = self._local_llm_mutate()
+            elif self.llm_client and torch.rand(1).item() < 0.6:
                 child = self._llm_crossover_or_mutate()
             else:
                 child = self._template_crossover_or_mutate()
@@ -150,7 +168,155 @@ class LLMCodeEvolver:
                 pass
         return None
 
-    # ── LLM methods ──
+    # ── Local Domain LLM methods ──
+
+    def _local_llm_generate(self) -> list[CodeHypothesis]:
+        """Use local domain LLM to generate hypotheses from observations."""
+        if not self.has_local_llm:
+            return self._template_initial()
+
+        from soma_mythos_ehra.arc3.trajectory_tokenizer import (
+            tokenize_state, PAD, SOS, SEP, TOKEN_MAP,
+        )
+
+        hypotheses = []
+        for _ in range(self.config.population_size):
+            # Build context from recent observations
+            context_tokens = [SOS]
+            for obs in self.observation_buffer[-5:]:
+                grid = np.array(obs["prev_grid"])
+                state_tokens = tokenize_state(grid)
+                context_tokens.extend(state_tokens)
+                context_tokens.append(SEP)
+                context_tokens.append(obs["action"] + 4)  # action offset
+                context_tokens.append(SEP)
+
+            # Pad to fixed length
+            max_ctx = 64
+            if len(context_tokens) < max_ctx:
+                context_tokens = context_tokens + [PAD] * (max_ctx - len(context_tokens))
+            else:
+                context_tokens = context_tokens[:max_ctx]
+
+            input_tensor = torch.tensor([context_tokens], dtype=torch.long)
+            device = next(self.local_llm.parameters()).device
+            input_tensor = input_tensor.to(device)
+
+            # Generate
+            with torch.no_grad():
+                output = self.local_llm.generate(
+                    input_tensor, max_new_tokens=32,
+                    temperature=0.9, top_k=40,
+                )
+
+            gen_tokens = output[0].tolist()
+            # Convert grammar tokens to code
+            code = self._tokens_to_code(gen_tokens)
+            if code:
+                hypotheses.append(CodeHypothesis(
+                    code=code, generation=0, source="local_llm",
+                ))
+
+        return hypotheses if hypotheses else self._template_initial()
+
+    def _local_llm_mutate(self) -> CodeHypothesis | None:
+        """Use local LLM to mutate a hypothesis."""
+        if not self.has_local_llm or not self.population:
+            return self._template_crossover_or_mutate()
+
+        from soma_mythos_ehra.arc3.trajectory_tokenizer import (
+            tokenize_state, PAD, SOS, SEP, TOKEN_MAP,
+        )
+
+        # Build context from best hypothesis + observations
+        best = self.population[0]
+        context_tokens = [SOS]
+        for obs in self.observation_buffer[-3:]:
+            grid = np.array(obs["prev_grid"])
+            state_tokens = tokenize_state(grid)
+            context_tokens.extend(state_tokens)
+            context_tokens.append(SEP)
+
+        # Pad
+        max_ctx = 64
+        if len(context_tokens) < max_ctx:
+            context_tokens = context_tokens + [PAD] * (max_ctx - len(context_tokens))
+        else:
+            context_tokens = context_tokens[:max_ctx]
+
+        input_tensor = torch.tensor([context_tokens], dtype=torch.long)
+        device = next(self.local_llm.parameters()).device
+        input_tensor = input_tensor.to(device)
+
+        with torch.no_grad():
+            output = self.local_llm.generate(
+                input_tensor, max_new_tokens=24,
+                temperature=1.0, top_k=50,
+            )
+
+        gen_tokens = output[0].tolist()
+        code = self._tokens_to_code(gen_tokens)
+        if code:
+            return CodeHypothesis(
+                code=code, generation=self.generation,
+                parent_id=best.id, source="local_llm_mutant",
+            )
+        return self._template_crossover_or_mutate()
+
+    def _tokens_to_code(self, token_ids: list[int]) -> str | None:
+        """Convert generated token IDs to executable Python code."""
+        from soma_mythos_ehra.arc3.trajectory_tokenizer import TOKEN_MAP, ACTION_OFFSET, REWARD_BASE, STATE_BASE, SEP
+
+        # Extract grammar tokens
+        grammar_names = []
+        for tid in token_ids:
+            if tid in TOKEN_MAP.id_to_grammar:
+                grammar_names.append(TOKEN_MAP.id_to_grammar[tid])
+
+        if not grammar_names:
+            return None
+
+        # Map grammar names to code
+        code_templates = {
+            "rotate_90": "import numpy as np\nresult = np.rot90(grid, -1)",
+            "rotate_180": "import numpy as np\nresult = np.rot90(grid, 2)",
+            "rotate_270": "import numpy as np\nresult = np.rot90(grid, 1)",
+            "flip_h": "import numpy as np\nresult = grid[:, ::-1].copy()",
+            "flip_v": "import numpy as np\nresult = grid[::-1, :].copy()",
+            "transpose": "import numpy as np\nresult = grid.T.copy()",
+            "scale_2": "import numpy as np\nresult = np.repeat(np.repeat(grid, 2, axis=0), 2, axis=1)",
+            "scale_3": "import numpy as np\nresult = np.repeat(np.repeat(grid, 3, axis=0), 3, axis=1)",
+            "fill_holes": "import numpy as np\nresult = grid.copy()\nfrom scipy.ndimage import binary_fill_holes\nmask = (grid > 0)\nresult[binary_fill_holes(mask)] = 1",
+            "shift_down": "import numpy as np\nresult = np.roll(grid, 1, axis=0)",
+            "shift_up": "import numpy as np\nresult = np.roll(grid, -1, axis=0)",
+            "shift_left": "import numpy as np\nresult = np.roll(grid, -1, axis=1)",
+            "shift_right": "import numpy as np\nresult = np.roll(grid, 1, axis=1)",
+            "mirror_h": "import numpy as np\nresult = np.fliplr(grid).copy()",
+            "mirror_v": "import numpy as np\nresult = np.flipud(grid).copy()",
+            "tessellate_2x2": "import numpy as np\nresult = np.tile(grid, (2, 2))",
+            "tessellate_3x3": "import numpy as np\nresult = np.tile(grid, (3, 3))",
+            "invert_mask": "import numpy as np\nresult = (grid == 0).astype(int)",
+            "grow_objects": "import numpy as np\nfrom scipy.ndimage import binary_dilation\nresult = binary_dilation(grid > 0).astype(int)",
+            "shrink_objects": "import numpy as np\nfrom scipy.ndimage import binary_erosion\nresult = binary_erosion(grid > 0).astype(int)",
+            "compose": None,  # Skip composition operators
+            "branch": None,
+            "apply_to_objects": None,
+        }
+
+        # Build code from first valid grammar token
+        for name in grammar_names:
+            if name in code_templates and code_templates[name] is not None:
+                return code_templates[name]
+
+        # Fallback: try to combine multiple primitives
+        if len(grammar_names) >= 2:
+            valid = [code_templates[n] for n in grammar_names if n in code_templates and code_templates[n] is not None]
+            if valid:
+                return valid[0]  # Use first valid
+
+        return None
+
+    # ── OpenAI LLM methods ──
 
     def _llm_generate_initial(self) -> list[CodeHypothesis]:
         """Use LLM to generate diverse hypotheses from observations."""
