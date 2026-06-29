@@ -166,7 +166,7 @@ def tokens_to_text(token_ids: list[int]) -> str:
     """Convert token IDs back to ASCII text."""
     chars = []
     for t in token_ids:
-        if ASCII_BASE <= t < ASCII_BASE + 96:
+        if ASCII_BASE + 32 <= t <= ASCII_BASE + 127:
             c = chr(t - ASCII_BASE)
             chars.append(c)
     return "".join(chars)
