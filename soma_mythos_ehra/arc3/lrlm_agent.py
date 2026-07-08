@@ -296,7 +296,8 @@ class LRLMAgent:
             if self.config.verbose and step % 20 == 0:
                 print(f"  Step {step:3d}: {next_obs.state:12s} act={action} "
                       f"buf={len(self.buffer)}")
-                print(f"         {trace}")
+                safe_trace = trace.encode("ascii", errors="replace").decode("ascii")
+                print(f"         {safe_trace}")
 
             if next_obs.state == "WIN":
                 if self.config.verbose:
