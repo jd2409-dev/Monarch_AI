@@ -1,23 +1,37 @@
-# SOMA-Mythos-EHRA — Active-Inference LRLM for ARC-AGI-3
+# SOMA-Mythos-EHRA — Neuro-Symbolic Intelligence Platform
 
 A self-contained, dual-engine Large Reasoning and Language Model (LRLM) built
-entirely on local GPU. Combines active-inference world modeling, MCTS-guided
-reasoning, and behavioral-cloned action prediction to solve interactive
-ARC-AGI-3 game environments — with zero external API dependencies.
+entirely on local GPU from scratch. Combines active-inference world modeling,
+MCTS-guided reasoning, Lean 4 formal verification, and meta-cognitive routing
+to solve interactive ARC-AGI-3 game environments and mathematical theorem
+proving — with zero external API dependencies and no local LLMs (no Gemma,
+no Qwen3).
 
 ## Architecture
 
 ```
-                         THE UNIFIED DUAL-ENGINE LRLM
+                         THE OMNISCIENT INTELLIGENCE CORE
 
-  [User Query] ──► [IntentClassifier] ──► Router ──┬──► System 1 (Creative)
-                                                    │    Local Qwen3/Gemma via Ollama
-                                                    │    Essays, brainstorming, logic
-                                                    │
-                                                    └──► System 2 (Symbolic)
-                                                         Active Inference Core
-                                                         MCTS-verified execution
-                                                         Zero-hallucination
+                         ┌─────────────────────────┐
+                         │ Raw User Prompt Input   │
+                         └────────────┬────────────┘
+                                      │
+                                      ▼
+                    ┌─────────────────────────────────────┐
+                    │     MetaCognitiveRouter             │
+                    │     (Neuro-Symbolic Gatekeeper)     │
+                    │     Entropy Analysis + Hidden State │
+                    └───────────┬─────────────┬──────────┘
+                                │             │
+                     Score < 0.5│             │Score >= 0.5
+                ┌───────────────┘             └───────────────┐
+                ▼                                             ▼
+   ┌────────────────────────┐               ┌────────────────────────┐
+   │  SYSTEM 1: CREATIVE    │               │  SYSTEM 2: SYMBOLIC    │
+   │  SOMA Creative Engine  │               │  SOMA Math Encoder     │
+   │  Concept Induction     │               │  Mythos Math World Mdl │
+   │  Essay Generation      │               │  EHRA Lean 4 Executor  │
+   └────────────────────────┘               └────────────────────────┘
 ```
 
 ### Core Brain: SOMA (State-Observation-Model Architecture)
@@ -29,6 +43,8 @@ ARC-AGI-3 game environments — with zero external API dependencies.
 | Grid Decoder | `active_world_model.py` | Predicts actual next grid pixels |
 | Transition Predictor | `active_world_model.py` | Predicts next latent from (state, action, diff) |
 | Reward Predictor | `active_world_model.py` | Predicts win probability per action |
+| SOMA Math Encoder | `soma_math.py` | Lean 4 goal states → 512-dim latent vectors |
+| SOMA Creative Engine | `soma_creative.py` | System 1 essay generation, concept maps |
 
 ### Search Layer: Mythos (Monte Carlo Tree Search)
 
@@ -37,7 +53,9 @@ ARC-AGI-3 game environments — with zero external API dependencies.
 | Hypothesis Ensemble | `active_world_model.py` | 5 diverse world models for uncertainty estimation |
 | InfoMax Explorer | `info_max_explorer.py` | Curiosity-driven action selection via ensemble disagreement |
 | MCTS Reasoning | `lrlm_reasoning_engine.py` | Beam search with world model verification |
-| Code Evolution | `code_evolver.py` | 27 executable heuristic hypotheses, evolved via local LLM |
+| Code Evolution | `code_evolver.py` | 27 executable heuristic hypotheses, evolved locally |
+| Mythos Math World Model | `mythos_math.py` | Tactic success prediction + ensemble uncertainty |
+| Concept Induction | `concept_induction.py` | Dynamic concept invention for reasoning breakthroughs |
 
 ### Execution Layer: EHRA (Environment-Harness Runtime Agent)
 
@@ -46,18 +64,24 @@ ARC-AGI-3 game environments — with zero external API dependencies.
 | ARC-AGI-3 Connector | `agi3_connector.py` | Official SDK wrapper for live game environments |
 | Interactive Agent | `interactive_agent.py` | Full active-inference loop (explore → train → evolve) |
 | Experience Replay | `replay_buffer.py` | 100K-capacity prioritized buffer |
-| Curriculum Manager | `curriculum_manager.py` | Multi-level progression with knowledge transfer |
-| Efficiency Optimizer | `efficiency_optimizer.py` | Trajectory replay + RHAE action efficiency tracking |
+| EHRA Math Executor | `ehra_math.py` | Lean 4 subprocess + MCTS theorem proving |
+| World Model Trainer | `world_model_trainer.py` | Online ensemble training with stop-gradient |
+
+### Meta-Cognition Layer
+
+| Component | File | Purpose |
+|-----------|------|---------|
+| MetaCognitiveRouter | `meta_router.py` | Entropy-based intent routing (no keywords) |
+| Omniscient Shell | `lrlm_ultimate_shell.py` | Unified terminal with autonomous routing |
 
 ### LRLM Layer (Large Reasoning and Language Model)
 
 | Component | File | Params | Purpose |
 |-----------|------|--------|---------|
-| Action Model | `local_action_model.py` | 3.2M | Causal transformer for action prediction |
-| LRLM Core | `lrlm_core.py` | 5.4M | Multi-modal fusion: grid + action + text |
-| Game Tokenizer | `game_tokenizer.py` | — | 128-vocab tokenizer for trajectories |
-| Unified Router | `unified_lrlm.py` | — | Dual-engine orchestration (System 1 + 2) |
-| Architecture Chat | `architecture_chat.py` | — | Zero-hallucination conversational controller |
+| ARCDomainLLM | `local_coder.py` | 5.4M | Scratch-built causal transformer |
+| Full LRLM Trainer | `train_full_lrlm.py` | 5.4M | Four-tier interleaved training pipeline |
+| Interleaved Loader | `interleaved_data_loader.py` | — | Balanced 25/25/25/25 batch mixing |
+| Four-Tier Dataset | `four_tier_dataset.py` | — | 210K samples, 8192 shared vocab |
 
 ## Install
 
@@ -69,154 +93,177 @@ cd EHRA
 pip install -e ".[dev]"
 ```
 
+### Lean 4 (Optional, for Theorem Proving)
+
+```bash
+# Install elan (Lean version manager)
+curl https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh -sSf | sh
+# Or on Windows:
+Invoke-WebRequest -Uri 'https://raw.githubusercontent.com/leanprover/elan/master/elan-init.ps1' -OutFile 'elan-init.ps1'
+powershell -ExecutionPolicy Bypass -File elan-init.ps1
+```
+
 ## Quick Start
 
-### 1. Run the Interactive Agent
+### 1. Train the LRLM from Scratch
 
 ```bash
-# Play 3 ARC-AGI-3 games, 2 episodes each
-python benchmark_interactive.py --max-games 3 --episodes 2
+# Train on 5K subset (quick validation)
+python -c "from soma_mythos_ehra.arc3.train_full_lrlm import LRLMTrainer; LRLMTrainer().train()"
+
+# Train on full 210K dataset
+python -m soma_mythos_ehra.arc3.train_full_lrlm --epochs 50
 ```
 
-### 2. Train the Action Model
+### 2. Launch the Omniscient Intelligence Shell
 
 ```bash
-# Collect transitions from 3 games, train action model + LRLM
-python train_action_model.py --games 3 --episodes 2 --epochs 10
-```
-
-This produces two checkpoints:
-- `checkpoints/action_model.pt` (3.2M params)
-- `checkpoints/lrlm.pt` (5.4M params)
-
-### 3. Launch the LRLM Terminal
-
-```bash
-# Auto-routing between System 1 and System 2
-python lrlm_terminal.py
-
-# Force all queries to symbolic core (System 2)
-python lrlm_terminal.py --system2
-
-# Force all queries to creative engine (System 1)
-python lrlm_terminal.py --system1
+# Meta-cognitive routing (no keywords, pure entropy analysis)
+python -m soma_mythos_ehra.arc3.lrlm_ultimate_shell
 ```
 
 Example session:
 
 ```
-==============================================================
-  SOMA-MYTHOS-EHRA DUAL-ENGINE LRLM COGNITIVE CORE
-==============================================================
+======================================================================
+  SOMA-MYTHOS-EHRA OMNISCIENT INTELLIGENCE CORE
+  Meta-Cognitive Routing | Zero Keywords | Active Entropy Analysis
+======================================================================
   Device: cuda
-  LRLM: 5,446,666 params on cuda
+  Parameters: 5,446,666
+  Meta-Cognitive Router: initialized
+----------------------------------------------------------------------
 
-  System 1 (Foundation): Offline (qwen3-coder:30b)
-  System 2 (Symbolic): Active (MCTS verified)
-  Routing: 0 queries
+[Operator] ──> the emergence of conscious loops inside neural networks
 
-  Commands: 'help', 'status', 'stats', 'exit'
---------------------------------------------------------------
+  [Meta-Cognition] Entropy: 0.612 | Hidden: 0.489 | Score: 0.491 | Confidence: 0.995
+  [Routing] System 1: Fluid Conceptual Generation Engine
 
-[Operator] ──> What actions are available in the current game?
+  [System 1 Output]
+  The emergence of conscious loops inside isolated neural networks...
 
-[LRLM Brain] ──> Buffer: 1318 transitions. Recent rewards: [0.0, 0.0, 0.0, 0.0, 0.0].
+[Operator] ──> theorem add_zero (n : Nat) : n + 0 = n
 
-[Operator] ──> Write a short paragraph about how active inference works.
+  [Meta-Cognition] Entropy: 0.531 | Hidden: 0.502 | Score: 0.503 | Confidence: 0.997
+  [Routing] System 2: Formal Logic & Verification Engine
 
-[Operator] ──> help
-
-  Available commands:
-    status    - System status
-    stats     - Routing statistics
-    help      - This message
-    exit/quit - End session
-
-  Queries are auto-routed:
-    System 1: Creative writing, brainstorming, broad reasoning
-    System 2: Grid operations, game mechanics, architecture queries
+  [System 2] Attempting to prove: theorem add_zero (n : Nat) : n + 0 = n...
 ```
 
-### 4. Deep Exploration of a Single Game
+### 3. Run ARC-AGI-3 Benchmark
 
 ```bash
-# Run 10 episodes on one game to discover winning patterns
-python benchmark_focused.py --game ls20-9607627b --episodes 10
+# Play 5 games, 3 episodes each
+python benchmark_lrlm.py --max-games 5 --episodes 3
 ```
 
-### 5. Full Benchmark
+### 4. Calibrate World Model on Live Transitions
 
 ```bash
-# Run 5 games, 3 episodes each
-python benchmark_interactive.py --max-games 5 --episodes 3
+# Collect transitions, train ensemble, re-run benchmark
+python calibrate_world_model.py --collect-games 5 --cal-epochs 50 --verification 0.7
+```
+
+### 5. Test the Mathematical Stack
+
+```bash
+# Test SOMA, Mythos, EHRA math components
+python run_math_proof_loop.py
 ```
 
 ## Training Results
 
-| Model | Params | Loss Start | Loss Final | Epochs | Data |
-|-------|--------|------------|------------|--------|------|
-| Action Model | 3.2M | 3.01 | 1.76 | 10 | 1,318 transitions |
-| LRLM | 5.4M | 0.64 | 0.00 | 5 | 1,318 transitions |
-| World Model | — | 200+ | 8-14 | per-episode | online |
+| Model | Params | Loss Start | Loss Final | PPL Final | Data |
+|-------|--------|------------|------------|-----------|------|
+| LRLM (5K subset) | 5.4M | 5.53 | 0.40 | 1.49 | 5K samples |
+| LRLM (full) | 5.4M | — | — | — | 210K samples |
+| World Model | — | 3.62 | 0.85 | — | 527 live transitions |
 
 ## Key Design Principles
 
-### Zero-Hallucination via Latent Grounding
-
-All System 2 outputs are anchored in real VRAM tensors. The LRLM cannot invent
-game states because the first tokens injected into its transformer are always
-the actual `grid_latent` and `action_logits` from the active world model.
-
-### Test-Time Compute via MCTS
-
-Instead of greedy token generation, the reasoning engine runs a beam search
-over token candidates. Action tokens are cross-verified against the world
-model's ensemble predictions. Paths that contradict physical transition rules
-are pruned.
-
-### Self-Contained Local Inference
+### Zero External Dependencies
 
 Every component runs on local CUDA:
 - **0 external API calls** required
+- **0 local LLMs** (no Gemma, no Qwen3) — only the scratch-built LRLM
 - Sub-millisecond action model inference
 - World model trains online from replay buffer
-- Code evolution uses local LLM (841K params) + heuristic library
+
+### Meta-Cognitive Routing (No Keywords)
+
+The `MetaCognitiveRouter` analyzes prompts through the LRLM's own transformer
+layers, measuring token distribution entropy and hidden state patterns:
+- **Low entropy** (structured, logical) → System 2 (Formal Verification)
+- **High entropy** (fluid, creative) → System 1 (Creative Synthesis)
+- No string matching, no keyword filters
+
+### Four-Tier Interleaved Training
+
+The LRLM trains on interleaved data from four domains:
+- **Tier 1** (25%): Core physics interactions
+- **Tier 2** (25%): Synthetic procedural traces
+- **Tier 3** (25%): Algorithmic logic chains
+- **Tier 4** (25%): Structural text corpora
+
+Shared 8192-token vocabulary across all tiers prevents catastrophic forgetting.
+
+### Lean 4 Formal Verification
+
+The EHRA Math Executor interfaces with Lean 4 via subprocess communication:
+- Parse goal states and error messages from compiler output
+- Execute tactics and verify proof steps
+- Run in simulation mode when Lean 4 is not installed
 
 ## Files
 
 ```
 soma_mythos_ehra/arc3/
 ├── active_world_model.py      # World model v2 (stop-gradient, diff encoder)
-├── info_max_explorer.py        # Curiosity-driven exploration
-├── hypothesis_manager.py       # Bayesian belief tracking
-├── replay_buffer.py            # 100K prioritized experience replay
-├── world_model_trainer.py      # Online ensemble training
-├── code_evolver.py             # 27 heuristic hypotheses + LLM evolution
-├── curriculum_manager.py       # Multi-level progression
-├── efficiency_optimizer.py     # Trajectory replay + RHAE tracking
-├── agi3_connector.py           # ARC-AGI-3 SDK wrapper
-├── interactive_agent.py        # Full active-inference agent v4
-├── game_tokenizer.py           # 128-vocab trajectory tokenizer
-├── local_action_model.py       # 3.2M causal transformer
-├── lrlm_core.py                # 5.4M multi-modal LRLM
-├── lrlm_reasoning_engine.py    # MCTS beam search verification
-├── unified_lrlm.py             # Dual-engine router
-├── architecture_chat.py        # Zero-hallucination chat controller
-├── local_coder.py              # 841K local domain LLM
-├── trajectory_tokenizer.py     # 162-vocab trajectory tokenizer
+├── info_max_explorer.py       # Curiosity-driven exploration
+├── hypothesis_manager.py      # Bayesian belief tracking
+├── replay_buffer.py           # 100K prioritized experience replay
+├── world_model_trainer.py     # Online ensemble training
+├── code_evolver.py            # 27 heuristic hypotheses + LLM evolution
+├── curriculum_manager.py      # Multi-level progression
+├── efficiency_optimizer.py    # Trajectory replay + RHAE tracking
+├── agi3_connector.py          # ARC-AGI-3 SDK wrapper
+├── interactive_agent.py       # Full active-inference agent v4
+├── lrlm_agent.py              # LRLM agent v2 (hypothesis-driven)
+├── game_tokenizer.py          # 128-vocab trajectory tokenizer
+├── local_coder.py             # 5.4M scratch-built ARCDomainLLM
+├── train_full_lrlm.py         # Full training pipeline
+├── four_tier_dataset.py       # 210K sample generator, 8192 vocab
+├── interleaved_data_loader.py # Balanced batch mixing
+├── lrlm_interactive_shell.py  # Live chat with LRLM
+├── hypothesis_engine.py       # Scientific method loop
+├── meta_router.py             # Neuro-symbolic gatekeeper
+├── soma_math.py               # SOMA encoder for Lean 4
+├── mythos_math.py             # Mythos world model for tactics
+├── ehra_math.py               # EHRA executor for Lean 4
+├── soma_creative.py           # Creative essay generation
+├── concept_induction.py       # Dynamic concept invention
+├── lrlm_ultimate_shell.py     # Omniscient intelligence terminal
 └── [existing DSL/solver files]
 
-benchmarks/
-├── benchmark_interactive.py    # Multi-game ARC-AGI-3 benchmark
-├── benchmark_focused.py        # Deep single-game exploration
-├── benchmark_dsl.py            # Static grid benchmark (1/30)
-└── train_action_model.py       # Full training pipeline
-
 checkpoints/
-├── action_model.pt             # Trained action model (3.2M params)
-├── lrlm.pt                     # Trained LRLM (5.4M params)
-├── local_arc_llm.pt            # Local domain LLM (841K params)
-└── [other training checkpoints]
+├── lrlm_full/                 # Trained LRLM checkpoints
+│   ├── lrlm_best.pt
+│   ├── lrlm_final.pt
+│   └── metrics.json
+├── calibrated_world_model.pt  # Calibrated ensemble
+└── scratchpad.json            # Hypothesis scratchpad
+
+data/
+├── four_tier/                 # Training data
+│   ├── train_tokens.pt        # 199.5K samples
+│   ├── val_tokens.pt          # 10.5K samples
+│   └── meta.json
+└── training/                  # ARC-AGI static grids
+
+formal_math_core/              # Lean 4 project (auto-generated)
+├── lakefile.lean
+├── Main.lean
+└── TacticRunner.lean
 ```
 
 ## Tests
@@ -230,21 +277,6 @@ python -m pytest
 - Door/switch mechanics, teleporter mechanics
 - Multi-channel encoding, batch simulation
 - CellType enum validation
-
-## Benchmark Results
-
-### ARC-AGI-3 Interactive Track
-
-| Run | Games | Won | Buffer | Action Loss | Notes |
-|-----|-------|-----|--------|-------------|-------|
-| v4 | 5 | 0/5 | 3,076 | 8-14 | Stop-gradient, heuristic code |
-| v5-lrlm | 3 | 0/3 | 1,318 | 1.76 | Action model trained |
-
-### Static Grid (ARC-AGI-1)
-
-| Task | Result | Method |
-|------|--------|--------|
-| 08ed6ac7 | Solved | Template search |
 
 ## License
 

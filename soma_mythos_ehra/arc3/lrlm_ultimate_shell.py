@@ -1,16 +1,14 @@
-"""LRLM Ultimate Intelligence Shell — Unified Dual-Engine Terminal.
+"""Omniscient Intelligence Shell — Meta-Cognitive Dual-Engine Terminal.
 
-Merges System 1 (Creative Synthesis) and System 2 (Formal Verification)
-into a single interactive console. Routes user commands to appropriate
-engines based on intent detection.
+Routes user prompts to System 1 (Creative Synthesis) or System 2 (Formal
+Verification) using the MetaCognitiveRouter. No keyword matching — pure
+entropy-based intent analysis from the LRLM's own hidden states.
 
 Commands:
-  - write/essay/idea <topic>  → System 1: Creative Synthesis
-  - prove/theorem <statement> → System 2: Lean 4 Formal Verification
-  - concept <topic>           → System 1: Concept Map Generation
-  - hypothesis <observation>  → System 1: Scientific Hypothesis
   - status                    → Show system status
   - exit/quit                 → Exit terminal
+
+Everything else is routed autonomously by the MetaCognitiveRouter.
 """
 from __future__ import annotations
 
@@ -26,25 +24,27 @@ from soma_mythos_ehra.arc3.four_tier_dataset import VOCAB_SIZE
 from soma_mythos_ehra.arc3.soma_creative import SOMACreativeEngine
 from soma_mythos_ehra.arc3.ehra_math import EHRAMathExecutor
 from soma_mythos_ehra.arc3.concept_induction import MythosConceptInductor
+from soma_mythos_ehra.arc3.meta_router import MetaCognitiveRouter
 
 
-class UltimateIntelligenceShell:
+class OmniscientIntelligenceShell:
     """
-    Unified Intelligence Terminal.
+    Unified Intelligence Terminal with Meta-Cognitive Routing.
     
-    Routes between System 1 (Creative) and System 2 (Math) based on
-    user intent. Manages LRLM lifecycle and engine coordination.
+    Uses the MetaCognitiveRouter to analyze prompt entropy and hidden states,
+    routing to System 1 (Creative) or System 2 (Symbolic) without keywords.
     """
 
     def __init__(self, checkpoint_path: str = "checkpoints/lrlm_full/lrlm_best.pt"):
         """
-        Initialize the Ultimate Intelligence Shell.
+        Initialize the Omniscient Intelligence Shell.
         
         Args:
             checkpoint_path: Path to trained LRLM checkpoint
         """
         print("=" * 70)
-        print("SOMA-MYTHOS-EHRA UNIFIED INTELLIGENCE TERMINAL")
+        print("SOMA-MYTHOS-EHRA OMNISCIENT INTELLIGENCE CORE")
+        print("Meta-Cognitive Routing | Zero Keywords | Active Entropy Analysis")
         print("=" * 70)
         print("Initializing systems...")
         
@@ -52,11 +52,11 @@ class UltimateIntelligenceShell:
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         print(f"  Device: {self.device}")
         
-        # Build tokenizer (simplified - use existing tokenizer)
+        # Build tokenizer
         self.tokenizer = self._build_tokenizer()
         print(f"  Tokenizer: {self.tokenizer.vocab_size} vocab")
         
-        # Build LRLM
+        # Build LRLM (scratch-built, no local LLMs like Gemma/Qwen3)
         config = ARCCoderConfig(
             vocab_size=VOCAB_SIZE,
             d_model=512,
@@ -69,7 +69,6 @@ class UltimateIntelligenceShell:
         
         # Load checkpoint if exists
         if os.path.exists(checkpoint_path):
-            # Allow loading checkpoints with config objects
             torch.serialization.add_safe_globals([ARCCoderConfig])
             checkpoint = torch.load(checkpoint_path, map_location=self.device, weights_only=True)
             if "model_state_dict" in checkpoint:
@@ -82,6 +81,10 @@ class UltimateIntelligenceShell:
         
         self.lrlm.eval()
         
+        # Initialize Meta-Cognitive Router (the gatekeeper)
+        self.router = MetaCognitiveRouter(self.lrlm, d_model=512, vocab_size=VOCAB_SIZE).to(self.device)
+        print(f"  Meta-Cognitive Router: initialized")
+        
         # Initialize engines
         self.creative_core = SOMACreativeEngine(self.lrlm, self.tokenizer)
         self.math_core = EHRAMathExecutor(self.lrlm, self.tokenizer)
@@ -93,9 +96,11 @@ class UltimateIntelligenceShell:
         # System stats
         self.total_params = sum(p.numel() for p in self.lrlm.parameters())
         self.commands_processed = 0
+        self.system1_count = 0
+        self.system2_count = 0
         
         print(f"  Parameters: {self.total_params:,}")
-        print(f"  Engines: Creative, Math, Concept Induction")
+        print(f"  Engines: Creative, Math, Concept Induction, Meta-Router")
         print("=" * 70)
         print()
 
@@ -108,9 +113,8 @@ class UltimateIntelligenceShell:
                 self.id_to_token = {v: k for k, v in self.token_to_id.items()}
             
             def encode(self, text):
-                # Simple character-level encoding for demo
                 tokens = []
-                for char in text[:512]:  # Truncate to max seq len
+                for char in text[:512]:
                     tokens.append(ord(char) % self.vocab_size)
                 if not tokens:
                     tokens = [0]
@@ -126,47 +130,11 @@ class UltimateIntelligenceShell:
         
         return SimpleTokenizer()
 
-    def detect_intent(self, user_input: str) -> str:
-        """
-        Detect user intent from input text.
-        
-        Returns:
-            "creative", "math", "concept", "status", or "exit"
-        """
-        lower = user_input.lower()
-        
-        # Exit commands
-        if lower in ["exit", "quit", "q"]:
-            return "exit"
-        
-        # Status
-        if lower in ["status", "info", "help"]:
-            return "status"
-        
-        # Math/proof commands
-        if any(kw in lower for kw in ["theorem", "prove", "lemma", "formal"]):
-            return "math"
-        
-        # Concept map commands
-        if any(kw in lower for kw in ["concept", "map", "outline", "structure"]):
-            return "concept"
-        
-        # Hypothesis commands
-        if any(kw in lower for kw in ["hypothesis", "theory", "scientific"]):
-            return "hypothesis"
-        
-        # Default to creative
-        return "creative"
-
     def launch_console(self):
-        """Launch the interactive console."""
-        print("Commands:")
-        print("  write/essay/idea <topic>  → Creative Synthesis")
-        print("  prove/theorem <statement> → Lean 4 Formal Verification")
-        print("  concept <topic>           → Concept Map Generation")
-        print("  hypothesis <observation>  → Scientific Hypothesis")
-        print("  status                    → Show system status")
-        print("  exit/quit                 → Exit terminal")
+        """Launch the interactive console with meta-cognitive routing."""
+        print("Type any prompt. The system will analyze its entropy profile")
+        print("and route to the appropriate engine automatically.")
+        print("Commands: 'status', 'exit'/'quit'")
         print()
         
         while True:
@@ -176,117 +144,101 @@ class UltimateIntelligenceShell:
                 if not user_input:
                     continue
                 
-                intent = self.detect_intent(user_input)
-                
-                if intent == "exit":
+                # Handle meta-commands directly
+                if user_input.lower() in ["exit", "quit", "q"]:
                     print("Shutting down intelligence terminal...")
                     break
                 
-                elif intent == "status":
+                if user_input.lower() in ["status", "info"]:
                     self._show_status()
+                    continue
                 
-                elif intent == "math":
-                    theorem = user_input
-                    for prefix in ["theorem", "prove", "lemma", "formal"]:
-                        theorem = theorem.replace(prefix, "").strip()
-                    if theorem.startswith(":"):
-                        theorem = theorem[1:].strip()
-                    self._handle_math(theorem)
+                # Tokenize input for meta-cognitive analysis
+                input_ids = self.tokenizer.encode(user_input)
+                if input_ids.dim() == 1:
+                    input_ids = input_ids.unsqueeze(0)
+                input_ids = input_ids.to(self.device)
                 
-                elif intent == "concept":
-                    topic = user_input
-                    for prefix in ["concept", "map", "outline", "structure"]:
-                        topic = topic.replace(prefix, "").strip()
-                    self._handle_concept(topic)
+                # Meta-Cognitive Analysis
+                analysis = self.router.analyze_prompt(input_ids)
                 
-                elif intent == "hypothesis":
-                    observation = user_input
-                    for prefix in ["hypothesis", "theory", "scientific"]:
-                        observation = observation.replace(prefix, "").strip()
-                    self._handle_hypothesis(observation)
+                routing_score = analysis["routing_score"]
+                decision = analysis["decision"]
+                confidence = analysis["confidence"]
+                entropy_comp = analysis["entropy_component"]
+                hidden_comp = analysis["hidden_component"]
                 
-                else:  # creative
+                # Display meta-cognition analysis
+                print(f"\n  [Meta-Cognition] Entropy: {entropy_comp:.3f} | "
+                      f"Hidden: {hidden_comp:.3f} | "
+                      f"Score: {routing_score:.3f} | "
+                      f"Confidence: {confidence:.3f}")
+                
+                if decision == "SYMBOLIC":
+                    print(f"  [Routing] System 2: Formal Logic & Verification Engine")
+                    self._handle_math(user_input)
+                    self.system2_count += 1
+                else:
+                    print(f"  [Routing] System 1: Fluid Conceptual Generation Engine")
                     self._handle_creative(user_input)
+                    self.system1_count += 1
                 
                 self.commands_processed += 1
+                print()
                 
             except KeyboardInterrupt:
                 print("\n\nInterrupted. Type 'exit' to quit.")
             except Exception as e:
                 print(f"Error: {e}")
 
-    def _handle_creative(self, topic: str):
-        """Handle creative writing requests."""
-        print(f"\n[System 1: Creative Synthesis]")
-        print(f"Generating essay on: '{topic}'")
-        print("-" * 50)
-        
+    def _handle_creative(self, prompt: str):
+        """Handle creative/generative requests."""
+        # Generate essay
         essay = self.creative_core.generate_astonishing_essay(
-            topic, target_length=500, temperature=0.8
+            prompt, target_length=500, temperature=0.8
         )
-        
-        print(essay)
-        print()
+        print(f"\n  [System 1 Output]")
+        print(f"  {essay}")
 
-    def _handle_math(self, theorem: str):
-        """Handle formal theorem proving."""
-        print(f"\n[System 2: Formal Verification]")
-        print(f"Attempting to prove: {theorem[:80]}...")
-        print("-" * 50)
+    def _handle_math(self, prompt: str):
+        """Handle formal verification requests."""
+        # Clean up prompt for theorem proving
+        theorem = prompt
+        for prefix in ["theorem", "prove", "lemma", "formal"]:
+            theorem = theorem.replace(prefix, "").strip()
+        if theorem.startswith(":"):
+            theorem = theorem[1:].strip()
         
+        # Attempt proof
         result = self.math_core.prove_conjecture(
             theorem, max_steps=30, use_world_model=True
         )
         
         if result["success"]:
-            print(f"\nFormally verified in {result['steps']} steps!")
+            print(f"\n  [System 2] Formally verified in {result['steps']} steps!")
         else:
-            print(f"\nProof search inconclusive after {result['steps']} steps")
-        print()
-
-    def _handle_concept(self, topic: str):
-        """Handle concept map generation."""
-        print(f"\n[System 1: Concept Mapping]")
-        print(f"Generating concept map for: '{topic}'")
-        print("-" * 50)
-        
-        concept_map = self.creative_core.generate_concept_map(topic, num_concepts=5)
-        
-        print(f"Topic: {concept_map['topic']}")
-        print(f"Concepts:")
-        for i, concept in enumerate(concept_map['concepts'], 1):
-            print(f"  {i}. {concept}")
-        print()
-
-    def _handle_hypothesis(self, observation: str):
-        """Handle scientific hypothesis generation."""
-        print(f"\n[System 1: Scientific Reasoning]")
-        print(f"Generating hypothesis from: '{observation}'")
-        print("-" * 50)
-        
-        hypothesis = self.creative_core.generate_hypothesis(observation)
-        
-        print(f"Observation: {observation}")
-        print(f"Hypothesis: {hypothesis}")
-        print()
+            print(f"\n  [System 2] Proof search inconclusive after {result['steps']} steps")
 
     def _show_status(self):
         """Show system status."""
-        print(f"\n{'='*50}")
-        print(f"SOMA-MYTHOS-EHRA System Status")
-        print(f"{'='*50}")
-        print(f"Parameters: {self.total_params:,}")
-        print(f"Device: {self.device}")
-        print(f"Commands Processed: {self.commands_processed}")
-        print(f"Vocabulary Size: {self.tokenizer.vocab_size}")
-        print(f"Inducted Concepts: {len(self.concept_inductor.inducted_concepts)}")
-        print(f"{'='*50}")
-        print()
+        print(f"\n  {'='*50}")
+        print(f"  SOMA-MYTHOS-EHRA System Status")
+        print(f"  {'='*50}")
+        print(f"  Parameters: {self.total_params:,}")
+        print(f"  Device: {self.device}")
+        print(f"  Commands Processed: {self.commands_processed}")
+        print(f"  System 1 (Creative): {self.system1_count}")
+        print(f"  System 2 (Symbolic): {self.system2_count}")
+        print(f"  Vocabulary Size: {self.tokenizer.vocab_size}")
+        print(f"  Inducted Concepts: {len(self.concept_inductor.inducted_concepts)}")
+        print(f"  Router Weights: entropy={torch.sigmoid(self.router.entropy_weight).item():.3f}, "
+              f"hidden={torch.sigmoid(self.router.hidden_weight).item():.3f}")
+        print(f"  {'='*50}")
 
 
 def main():
     """Main entry point."""
-    shell = UltimateIntelligenceShell()
+    shell = OmniscientIntelligenceShell()
     shell.launch_console()
 
 
